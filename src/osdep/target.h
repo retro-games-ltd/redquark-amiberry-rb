@@ -22,8 +22,8 @@
 #define GETBDM(x) (((x) - (((x) / 10000) * 10000)) / 100)
 #define GETBDD(x) ((x) % 100)
 
-#define AMIBERRYVERSION _T("Amiberry v3.3 (2020-09-17)")
-#define AMIBERRYDATE MAKEBD(2020, 9, 17)
+#define AMIBERRYVERSION _T("Amiberry v3.3+Redquark (2021-06-03)")
+#define AMIBERRYDATE MAKEBD(2021, 6, 3)
 
 #define IHF_WINDOWHIDDEN 6
 
@@ -41,7 +41,7 @@ extern int emulating;
 extern bool config_loaded;
 
 extern int z3_base_adr;
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX || defined REDQUARK
 extern unsigned long time_per_frame;
 extern bool volatile flip_in_progess;
 #endif
@@ -82,6 +82,7 @@ extern void set_rom_path(char* newpath);
 extern void get_rp9_path(char* out, int size);
 extern void get_savestate_path(char* out, int size);
 extern void get_screenshot_path(char* out, int size);
+extern void fetch_whdbootpath(char *out, int size);
 
 extern void extract_filename(const char* str, char* buffer);
 extern void extract_path(char* str, char* buffer);

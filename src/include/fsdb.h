@@ -165,6 +165,7 @@ extern unsigned int my_read (struct my_openfile_s*, void*, unsigned int);
 extern unsigned int my_write (struct my_openfile_s*, void*, unsigned int);
 extern int my_truncate (const TCHAR *name, uae_u64 len);
 extern int dos_errno (void);
+extern int my_existslink(const char* name);
 extern int my_existsfile (const TCHAR *name);
 extern int my_existsdir (const TCHAR *name);
 extern FILE *my_opentext (const TCHAR*);
@@ -193,5 +194,6 @@ extern int custom_fsdb_used_as_nname (a_inode *base, const TCHAR *nname);
 #define MYVOLUMEINFO_CDFS 16
 
 extern int my_getvolumeinfo (const TCHAR *root);
+extern const TCHAR * my_get_sha1_of_file( const char *filepath );
 
 #endif /* UAE_FSDB_H */

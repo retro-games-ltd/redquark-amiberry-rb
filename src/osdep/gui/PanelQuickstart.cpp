@@ -75,6 +75,7 @@ static struct amigamodels amodels[] = {
 			"Basic non-expanded configuration",
 			"2 MB Chip RAM expanded configuration",
 			"4 MB Fast RAM expanded configuration",
+			"8 MB Fast RAM expanded configuration",
 #ifdef ANDROID
          " ", " ", " ",
 #endif
@@ -91,6 +92,7 @@ static struct amigamodels amodels[] = {
 		4, "Amiga 1200", {
 			"Basic non-expanded configuration",
 			"4 MB Fast RAM expanded configuration",
+			"8 MB Fast RAM expanded configuration",
 #ifdef ANDROID
          " ", " ", " ", " ",
 #endif

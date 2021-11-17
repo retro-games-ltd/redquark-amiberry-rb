@@ -14,6 +14,9 @@
 #include "picasso96.h"
 #include "amiberry_gfx.h"
 
+#include <sys/syscall.h>
+#include <sys/types.h>
+
 #include <png.h>
 #include <SDL_image.h>
 
@@ -21,11 +24,43 @@
 #include "devices.h"
 #include "inputdevice.h"
 
+#include "SDL.h"
+#include "SDL_syswm.h"
+
+#include <pthread.h>
+#include <semaphore.h>
+
+#include <disk.h>
+
 #if 0
 #ifdef ANDROID
 #include <SDL_screenkeyboard.h>
 #endif
 #endif
+
+// Define this to keep host mouse ptr active, so desktop can still be used when debugging with gdb
+//#define KEEP_HOST_CURSOR
+
+#if defined REDQUARK
+# if defined(__arm__)
+#  include "GLES/gl.h"
+# endif
+# include "malifb.h"
+# include "audio.h"
+# include "virtual_keyboard.h"
+# include "memory.h"
+# include "newcpu.h"
+
+# if defined __x86_64__ || defined __x86__
+#  define NATIVE_WINDOW_INFO(s) (EGLNativeWindowType)s.info.x11.window
+# else
+#  define NATIVE_WINDOW_INFO(s) (EGLNativeWindowType)s.info.mali.window
+# endif
+#endif // REDQUARK
+
+//#define REPORT_FRAME_TIME
+//#define VSYNC_PERIOD_DEBUG
+#define THR 50
 
 #include "gfxboard.h"
 #include "statusline.h"
@@ -33,12 +68,12 @@
 #include "sounddep/sound.h"
 #include "threaddep/thread.h"
 
+smp_comm_pipe *volatile display_pipe = nullptr;
+uae_sem_t display_sem = nullptr;
 static uae_thread_id display_tid = nullptr;
-static smp_comm_pipe *volatile display_pipe = nullptr;
-static uae_sem_t display_sem = nullptr;
 static bool volatile display_thread_busy = false;
-#ifdef USE_DISPMANX
-static unsigned int current_vsync_frame = 0;
+#if defined USE_DISPMANX || defined REDQUARK
+static uint32_t current_vsync_frame = 0;
 unsigned long time_per_frame = 20000; // Default for PAL (50 Hz): 20000 microsecs
 static int vsync_modulo = 1;
 bool volatile flip_in_progess = false;
@@ -68,7 +103,7 @@ static bool clipboard_initialized;
 /* Possible screen modes (x and y resolutions) */
 #define MAX_SCREEN_MODES 14
 static int x_size_table[MAX_SCREEN_MODES] = { 640, 640, 720, 800, 800, 960, 1024, 1280, 1280, 1280, 1360, 1366, 1680, 1920 };
-static int y_size_table[MAX_SCREEN_MODES] = { 400, 480, 400, 480, 600, 540, 768, 720, 800, 1024, 768, 768, 1050, 1080 };
+static int y_size_table[MAX_SCREEN_MODES] = { 400, 480, 400, 480, 600, 540, 768,  720,  800, 1024, 768, 768, 1050, 1080 };
 
 struct PicassoResolution* DisplayModes;
 struct MultiDisplay Displays[MAX_DISPLAYS];
@@ -87,6 +122,7 @@ FILE* screenshot_file = nullptr;
 static void create_screenshot();
 static int save_thumb(char* path);
 int delay_savestate_frame = 0;
+int savestate_then_quit = 0;
 
 #ifdef USE_DISPMANX
 static unsigned long next_synctime = 0;
@@ -116,6 +152,7 @@ void vsync_callback(unsigned int a, void* b)
 }
 #endif
 
+#if !defined REDQUARK
 static int display_thread(void *unused)
 {
 #ifdef USE_DISPMANX
@@ -336,6 +373,514 @@ static int display_thread(void *unused)
 	}
 	return 0;
 }
+#endif // !reduark
+
+
+#ifdef XX_CPU_AMD64
+#   define printdbg(fmt, ...) printf(fmt, ## __VA_ARGS__)
+#else
+#   define printdbg(fmt, ...) {;} //(0)
+#endif
+
+#if defined REDQUARK
+#define GUI_WIDTH  800
+#define GUI_HEIGHT 600
+
+#undef  MAX_SCREEN_MODES
+#define MAX_SCREEN_MODES 8 // Only allow screen resolutions up to 1280x720
+
+static double mscalex, mscaley;
+
+static int vol_to_quit = -1;
+
+static volatile uae_atomic vsync_counter = 0;
+static unsigned long next_synctime = 0;
+
+#define USE_OUR_OWN_CENTERING
+//#define GFX_SCALE_DEBUG
+//#define GFX_SCALE_LINE_COUNTING
+
+#if defined GFX_SCALE_LINE_COUNTING
+extern void get_display_center( int *top, int *bottom );
+#endif
+
+MFB_Screen  *redquark_screen = NULL;
+MFB_Surface *redquark_surface = NULL;
+
+MFB_Texture *emu_resource = NULL;
+MFB_Texture *gui_resource = NULL;
+
+int dynamic_scale = 0;
+int center_mode = 0;
+int vres = 284;
+
+static unsigned char current_resource_amigafb = 0;
+
+extern int wait_cnt;
+// ----------------------------------------------------------------------------
+//
+int
+get_host_hz()
+{
+    return host_hz;
+}
+
+// ----------------------------------------------------------------------------
+//
+void vsync_callback( MFB_Screen *s )
+{
+	atomic_inc(&vsync_counter);
+
+#if defined VSYNC_PERIOD_DEBUG
+    static struct timeval old_time = {0};
+    static struct timeval now_time;
+    static unsigned long ave = 0;
+    static int ac = 0;
+
+    unsigned long diff = 0;
+    gettimeofday(&now_time, NULL);
+    if( old_time.tv_sec == 0 && old_time.tv_usec == 0 ) old_time = now_time;
+    diff = 1000000 * (now_time.tv_sec - old_time.tv_sec) + (now_time.tv_usec - old_time.tv_usec);
+    ave += diff;
+    if( ++ac % THR == 0 ) { //50
+        printf("GL frame time %ldus\n", ave / ac );
+        ac = 0;
+        ave = 0;
+    }
+    old_time = now_time;
+#endif
+}
+
+// ----------------------------------------------------------------------------
+//
+
+static float ovs = 0.0f;
+static float ohs = 0.0f;
+static int   odh = 0;
+static int   ods = 0;
+static int   overt = 0;
+static int   ovkd = 0;
+
+#define SCALE_NONE        0
+#define SCALE_DYNAMIC     1
+#define SCALE_FIXED       2
+#define SCALE_FIT         3
+#define SCALE_DYNAMIC_FIT 4
+
+#define SCALE_CRT_BASE        SCALE_DYNAMIC_FIT + 1
+
+#define SCALE_NONE_CRT        (SCALE_NONE        + SCALE_CRT_BASE)
+#define SCALE_DYNAMIC_CRT     (SCALE_DYNAMIC     + SCALE_CRT_BASE)
+#define SCALE_FIXED_CRT       (SCALE_FIXED       + SCALE_CRT_BASE)
+#define SCALE_FIT_CRT         (SCALE_FIT         + SCALE_CRT_BASE)
+#define SCALE_DYNAMIC_FIT_CRT (SCALE_DYNAMIC_FIT + SCALE_CRT_BASE)
+
+#define HLIMIT 1280
+#define VLIMIT ((HLIMIT * 284) / 360)
+
+static void redquark_dynamic_scale_reset()
+{
+    ovs = 0;
+    ohs = 0.0;
+    odh = 0;
+    ods = 0;
+    overt = 0;
+    ovkd = 0;
+}
+
+// ----------------------------------------------------------------------------
+//
+static inline void redquark_dynamic_scale( int ds )
+{
+    int t, b, h;
+    float vscale, hscale;
+
+    int v_dbl = changed_prefs.gfx_vresolution;
+
+    int vkd = virtual_keyboard_get_displacement();
+    if( vkd ) {
+        vkd = rint((250.0f - 136) / 2 * (vkd/136.0f));
+    }
+
+    // Calculate v and h scaling, takging into account double-line mode
+    if( ds == SCALE_FIXED ) { // Fixed scale - force maximum zoom
+        if( odh == display_height && ods == ds && ovkd == vkd ) return; // If height has not changed, nothing to do.
+        odh = display_height;
+        t = 0; b = 239; // Fake height to < 240 so that a scale of x3 is forced
+    } else { // All other scaling
+        int dyn_h = changed_prefs.gfx_dynamic_height;
+
+        if( dyn_h ) {
+            t = changed_prefs.gfx_dynamic_top;
+            b = t + (dyn_h << v_dbl);
+        } else {
+#if defined GFX_SCALE_LINE_COUNTING
+            get_display_center( &t, &b );
+            if( center_mode == 0 && t >= 26) t -= 26; // Adjust position if self-centering TODO Have a config adjust?
+#else
+            t = 0; b = display_height;
+#endif
+        } 
+    }
+    h = b - t;
+
+    if( ds == SCALE_FIT || ds == SCALE_DYNAMIC_FIT ) { // Screen fit or Screen fit dynamic
+        // Using h gives dynamic screen fit, using display_height is fixed screen fit
+        // UNLESS GFX_SCALE_LINE_COUNTING is disabled, then they are the same!
+        //
+        int uh = (ds == SCALE_FIT) ? display_height : h;
+
+        if( odh == uh && ods == ds && ovkd == vkd) return; // If height has not changed, nothing to do.
+        odh = uh;
+
+        if( display_height > 284 && uh <= 284 ) uh *= 2;
+        vscale = (float)720 / uh; 
+
+        hscale = vscale;
+        if( display_width > 360 ) {
+            if( !v_dbl ) hscale /= 2.0;
+        } else {
+            if(  v_dbl ) hscale *= 2.0;
+        }
+
+        // Make sure there is a safe region top and bottom (also apply horizontally to keep [approx] aspect ratio)
+        float safe = 720 / (720.0 - changed_prefs.gfx_dynamic_safe_zone * 2.0);
+        vscale /= safe;
+        hscale /= safe;
+    } else {
+        int safe = changed_prefs.gfx_dynamic_safe_zone * 2.0;
+       
+        // Non-fit, Dynamic or fixed scaling
+        vscale = display_height < 300 ? 2.0 : 1.0;
+        hscale = 1.0;
+
+        if( h <= ((240 - (safe/3)) << v_dbl) ) { // Can we get x3 height in 720?
+            vscale = !v_dbl ? 3.0 : 1.5;
+            if( display_width <= 360 ) hscale = 3;
+            else hscale = 1.5;
+        }
+        else if ( h <= ((360 - (safe/2)) << v_dbl) ) { // Can we get x2 height in 720?
+            vscale = !v_dbl ? 2.0 : 1.0;
+            if( display_width <= 360 ) hscale = 2.0;
+            else hscale = 1.0;
+        }
+    }
+
+    ods = ds;
+
+    // truncate scale factor to 2 decimal places
+    vscale = (float)((int)(vscale * 100 + 0.5f)) / 100.0f;
+    hscale = (float)((int)(hscale * 100 + 0.5f)) / 100.0f;
+
+    if( ovs != vscale || ohs != hscale || overt != h || ovkd != vkd ) {
+        ovs = vscale;
+        ohs = hscale;
+        overt = h;
+        ovkd = vkd;
+
+        int dh = display_height * vscale;
+        int dw = display_width  * hscale;
+        // Clamp to sane values... 360x284 scaled to max is 1280:1009
+        if( dh > VLIMIT || dw > HLIMIT ) {
+            dh = VLIMIT;
+            dw = HLIMIT;
+        }
+
+        // Calculate our own centering if smart vertical_centering is not enabled;
+        int adj = 0;
+#ifdef USE_OUR_OWN_CENTERING
+        if( center_mode == 0 ) { // Self centering
+            float h2 = h < 285 ? h : h / 2.0; // Make sure we use a height in 0..284 range
+            int s2 = display_height < 285 ? 1 : 2;
+            adj = ((284 / 2) - (t + (h2 / 2))) * vscale * s2;
+        }
+#endif
+        int vcent = ((720 - dh) / 2.0) - adj;
+
+#ifdef GFX_SCALE_DEBUG
+        printf("height = %3d disp_height = %3d ", h, display_height );
+        printf("vscale = %1.4f  hscale = %1.4f ", vscale, hscale );
+        printf(" w %3d  h %3d ", dw, dh );
+        printf(" vcent %3d (t %d b %d  adj %d) dbl_v = %d", vcent, t, b, adj, v_dbl );
+        printf("\n");
+#endif
+       
+        MFB_SurfaceSize( redquark_surface, ((1280 - dw)/2) - vkd, vcent, dw, dh );
+    }
+}
+
+// ----------------------------------------------------------------------------
+//
+static int do_fade_out( int redquark_alpha, int emu_running )
+{
+    if( !redquark_surface || !redquark_screen ) return 0;
+
+    int svol = get_volume();
+
+    while( emu_running && redquark_alpha != 0) {
+        redquark_alpha = redquark_alpha >= 10 ? redquark_alpha - 10 : 0;
+        MFB_SurfaceAlpha( redquark_surface, redquark_alpha );
+
+        svol = svol > 10 ? svol - 10 : 0;
+	    set_volume( svol );
+
+        MFB_ScreenRender( redquark_screen );
+        MFB_Display( redquark_screen );
+    }
+
+    return redquark_alpha;
+}
+
+// ----------------------------------------------------------------------------
+// REDQUARK
+static int show_queue_len = 0;
+static int painting = 0;
+static SDL_Surface* copy_screen = nullptr;
+static int copy_screen_size = 0;
+
+static int display_thread(void *unused)
+{
+	int width, height, depth;
+	SDL_Rect viewport;
+    MFB_Image_Type rgb_mode;
+    MFB_Texture_Flag scale_mode = MFB_Texture_Flag_Nearest; // MFB_Texture_Flag_CRT_Blend; // Linear; // Nearest;
+    int redquark_alpha = 0;
+    int emu_running = 0;
+
+#ifdef REPORT_FRAME_TIME
+    static auto last_time = 0;
+    static int ic = 0;
+#endif
+
+	for (;;) {
+		display_thread_busy = false;
+		auto signal = read_comm_pipe_u32_blocking(display_pipe);
+		display_thread_busy = true;
+		
+		switch (signal) {
+		case DISPLAY_SIGNAL_SETUP:
+            printdbg("DISPLAY_SIGNAL_SETUP @ %d Hz (rq = %p)\n", host_hz,  redquark_screen );
+            if( !redquark_screen ) {
+                SDL_SysWMinfo sysmw;
+                SDL_VERSION(&sysmw.version);
+                if( ! SDL_GetWindowWMInfo( sdl_window, &sysmw ) ) {
+                    printf( "Couldn't get window information: %s\n", SDL_GetError());
+                    return -1;
+                }
+                redquark_screen = MFB_ScreenCreateFromExisting( NATIVE_WINDOW_INFO(sysmw), host_hz < 55 ? MFB_Display_50Hz : MFB_Display_60Hz );
+
+                if( virtual_keyboard_init( redquark_screen ) < 0 ) {
+                    printf("Failed to init vkeyboard\n");
+                }
+                MFB_VSyncCallback( redquark_screen, vsync_callback );
+            }
+			break;
+
+		case DISPLAY_SIGNAL_SUBSHUTDOWN:
+            redquark_alpha = do_fade_out( redquark_alpha, emu_running );
+            if( emu_resource     ) MFB_TextureDestroy( &emu_resource );
+            if( gui_resource     ) MFB_TextureDestroy( &gui_resource );
+            if( redquark_surface ) MFB_SurfaceDestroy( &redquark_surface );
+            emu_running = 0;
+
+			uae_sem_post(&display_sem);
+			break;
+
+        case DISPLAY_SIGNAL_OPEN:
+            {
+                width = display_width;
+                height = display_height;
+
+                if (screen_is_picasso)
+                {
+                    if (picasso96_state.RGBFormat == RGBFB_R5G6B5
+                            || picasso96_state.RGBFormat == RGBFB_R5G6B5PC
+                            || picasso96_state.RGBFormat == RGBFB_CLUT)
+                    {
+                        depth = 16;
+                        rgb_mode = MFB_RGB565;
+					    pixel_format = SDL_PIXELFORMAT_RGB565;
+                    }
+                    else 
+                    {
+                        depth = 32;
+                        rgb_mode = MFB_RGBA;
+					    pixel_format = SDL_PIXELFORMAT_RGBA32;
+                    }	
+                }
+                else
+                {
+                    // Non picasso
+                   
+                    //depth = 16;
+                    //rgb_mode = MFB_RGB565;
+					//pixel_format = SDL_PIXELFORMAT_RGB565;
+                    depth = 32;
+                    rgb_mode = MFB_RGBA;
+					pixel_format = SDL_PIXELFORMAT_RGBA32;
+
+                    //width  = display_width  * 2 >> changed_prefs.gfx_resolution;
+                    //height = display_height * 2 >> changed_prefs.gfx_vresolution;
+                    int vscale = display_height < 300 ? 2.0 : 1;
+                    int hscale = display_width  < 361 ? 2.0 : 1;
+
+                    height = display_height * vscale;
+                    width  = display_width  * hscale;
+                }
+
+                dynamic_scale = changed_prefs.gfx_dynamic_scale;
+                
+                if( dynamic_scale >= SCALE_CRT_BASE ) {
+                    dynamic_scale -= SCALE_CRT_BASE;
+                    scale_mode     = MFB_Texture_Flag_CRT_Blend;
+                }
+                else {
+                    if (changed_prefs.scaling_method == -1)
+                    {
+                        if ( dynamic_scale >= SCALE_FIT ) scale_mode = MFB_Texture_Flag_Linear;  // Stretching so Linear scale
+                        else                              scale_mode = MFB_Texture_Flag_Nearest; // Else Nearest
+                    }
+                    else if (changed_prefs.scaling_method == 0) scale_mode = MFB_Texture_Flag_Nearest;
+                    else if (changed_prefs.scaling_method == 1) scale_mode = MFB_Texture_Flag_Linear;
+                }
+
+                center_mode   = changed_prefs.gfx_ycenter;
+                vres          = display_height >> changed_prefs.gfx_vresolution;
+
+                printdbg("Create SDL Surface %d x %d @ %d depth  vres %d\n", display_width, display_height, depth, changed_prefs.gfx_vresolution );
+
+                if( !screen ) screen = SDL_CreateRGBSurfaceWithFormat(0, display_width, display_height, depth, pixel_format);
+                if( !copy_screen ) copy_screen = SDL_CreateRGBSurfaceWithFormat(0, display_width, display_height, depth, pixel_format);
+                copy_screen_size = display_width * display_height * depth / 8;
+
+                printdbg("Create MFB surface (origin %d, %d) %d x %d\n", (1280 - width) / 2, (720 - height)/2, width , height );
+
+                // FIXME Surface size assumes screen will fit within 1280x720
+                redquark_surface = MFB_SurfaceCreate( redquark_screen, (1280 - width)/2, (720 - height)/2, width, height, 0, MFB_Surface_Opaque );
+
+                emu_resource = MFB_TextureCreate( display_width, display_height, rgb_mode );
+
+                if( MFB_TextureRegister( redquark_screen, emu_resource ) < 0 ) { printf("Error registering texture emu resource\n"); }
+
+                redquark_alpha = 0;
+                emu_running = 1;
+
+                MFB_SurfaceAlpha( redquark_surface, redquark_alpha );
+
+                redquark_dynamic_scale_reset();
+
+                //vsync_switchmode( currprefs.ntscmode ? 60 : 50 ); // Make sure modulo is set
+
+                uae_sem_post(&display_sem);
+            }
+            break;
+        
+        case DISPLAY_SIGNAL_SHOW:
+            {
+#ifdef REPORT_FRAME_TIME
+            last_time = read_processor_time();
+#endif
+            if( !redquark_surface || !emu_resource ) break;
+
+            if( redquark_surface && redquark_screen ) {
+                // Fade in screen and audio (only after savestate done, if pending and not if quit pending)
+                if( emu_running && redquark_alpha != 100 && savestate_state == 0 && savestate_then_quit == 0 ) {
+                    redquark_alpha = redquark_alpha <= (100 - 10) ? redquark_alpha + 10 : 100;
+                    MFB_SurfaceAlpha( redquark_surface, redquark_alpha );
+                    set_volume( redquark_alpha );
+                }
+            }
+
+            if (dynamic_scale && !screen_is_picasso) redquark_dynamic_scale( dynamic_scale );
+
+painting = 1;
+            MFB_TextureUpdate( emu_resource, 0, 0, emu_resource->width, emu_resource->height, (uint8_t *)(copy_screen->pixels), scale_mode);
+painting = 0;
+
+#ifdef REPORT_FRAME_TIME
+            if((ic % THR)==0) printf("- GPU Frame paint took %d\n", read_processor_time() - last_time );
+#endif
+            }
+            //break;
+
+        //case DISPLAY_SIGNAL_SHOW:
+#ifdef REPORT_FRAME_TIME
+            last_time = read_processor_time();
+#endif
+            MFB_SurfaceUpdate( redquark_surface, 0, 0, emu_resource->width, emu_resource->height, emu_resource );
+            MFB_ScreenRender( redquark_screen );
+            MFB_Display( redquark_screen ); // Immediately swap the display buffers
+
+#ifdef REPORT_FRAME_TIME
+            if((ic++ % THR)==0) printf("- GPU Frame show took %d\n", read_processor_time() - last_time );
+#endif
+            if( --show_queue_len < 0 ) show_queue_len = 0;
+            break;
+
+        case DISPLAY_SIGNAL_GUI_OPEN:
+            {
+                if(!redquark_screen) {
+                    //uae_sem_post(&display_sem);
+                    break;
+                }
+
+                display_width = GUI_WIDTH;
+                display_height = GUI_HEIGHT;
+                gui_resource = MFB_TextureCreate( GUI_WIDTH, GUI_HEIGHT, MFB_RGB565 );
+
+                mscalex = (double(GUI_WIDTH) / double(1280)); // FIXME 
+                mscaley = (double(GUI_HEIGHT) / double(720)); // FIXME
+
+                int vscale = GUI_HEIGHT < 300 ? 2.0 : 1;
+                int hscale = GUI_WIDTH  < 361 ? 2.0 : 1;
+
+                int dh = display_height * vscale;
+
+                printdbg("Create MFB surface 0,0, %d, %d (gui)\n",display_width * hscale, dh );
+
+                redquark_surface = MFB_SurfaceCreate( redquark_screen, 0, 720 - dh, display_width * hscale, display_height * vscale, 0, MFB_Surface_None );
+
+                // Expect textures to be pre-created
+                //
+                if( MFB_TextureRegister( redquark_screen, gui_resource ) < 0 ) { printf("Error registering gui texture\n"); }
+
+                uae_sem_post(&display_sem);
+            }
+            break;
+
+        case DISPLAY_SIGNAL_GUI_SHOW:
+            if( !gui_resource || !redquark_surface ) break;
+
+            MFB_TextureUpdate( gui_resource, 0, 0, gui_resource->width, gui_resource->height, (uint8_t *)(gui_screen->pixels), MFB_Texture_Flag_None );
+            MFB_SurfaceUpdate( redquark_surface, 0, 0, gui_resource->width, gui_resource->height, gui_resource );
+
+            MFB_ScreenRender( redquark_screen );
+            MFB_Display( redquark_screen ); // Do the swap after render. May cause tearing, if so, move to top of this section.
+            break;
+
+        case DISPLAY_SIGNAL_QUIT:
+            redquark_alpha = do_fade_out( redquark_alpha, emu_running );
+
+            if( emu_resource     ) MFB_TextureDestroy( &emu_resource );
+            if( gui_resource     ) MFB_TextureDestroy( &gui_resource );
+            if( redquark_surface ) MFB_SurfaceDestroy( &redquark_surface );
+
+            MFB_VSyncCallback( redquark_screen, NULL );
+
+            MFB_ScreenDestroy( &redquark_screen );
+
+			display_tid = nullptr;
+            emu_running = 0;
+            break;
+
+		default: 
+			break;
+		}
+	}
+	return 0;
+}
+
+#endif // REDQUARK
 
 #ifdef USE_DISPMANX
 void change_layer_number(int layer)
@@ -347,6 +892,8 @@ void change_layer_number(int layer)
 }
 #endif
 
+// ----------------------------------------------------------------------------
+//
 int graphics_setup(void)
 {
 #ifdef PICASSO96
@@ -379,16 +926,41 @@ int graphics_setup(void)
 		}
 	}
 
-	if (sdl_window == nullptr)
-	{
-		sdl_window = SDL_CreateWindow("Amiberry",
-			SDL_WINDOWPOS_UNDEFINED,
-			SDL_WINDOWPOS_UNDEFINED,
-			0,
-			0,
-			SDL_WINDOW_FULLSCREEN_DESKTOP);
-		check_error_sdl(sdl_window == nullptr, "Unable to create window");
-	}
+    if (sdl_window == nullptr)
+    {
+        // FIXME for RPi fullscreen
+        sdl_window = SDL_CreateWindow("Amiberry",
+                SDL_WINDOWPOS_UNDEFINED,
+                SDL_WINDOWPOS_UNDEFINED,
+                0,
+                0,
+                SDL_WINDOW_FULLSCREEN_DESKTOP
+                );
+        check_error_sdl(sdl_window == nullptr, "Unable to create window");
+    }
+
+#elif defined REDQUARK
+    if (sdl_window == nullptr)
+    {
+        sdl_window = SDL_CreateWindow("Redquark",
+#  if defined __x86_64__ || defined __x86__
+                SDL_WINDOWPOS_CENTERED,
+                SDL_WINDOWPOS_CENTERED,
+                1280,
+                720,
+                SDL_WINDOW_SHOWN | SDL_WINDOW_RESIZABLE
+#  else
+                SDL_WINDOWPOS_UNDEFINED,
+                SDL_WINDOWPOS_UNDEFINED,
+                0,
+                0,
+                SDL_WINDOW_FULLSCREEN_DESKTOP
+#  endif // __x86...
+                );
+        check_error_sdl(sdl_window == nullptr, "Unable to create window");
+    }
+    // Query host refresh rate
+	host_hz = MFB_GetDisplayMode() == MFB_Display_50Hz ? 50 : 60; // Dispmanx does int(60 * (1000.0f / 1001.0f)) -> 59
 
 #else
 	write_log("Trying to get Current Video Driver...\n");
@@ -448,11 +1020,14 @@ int graphics_setup(void)
 		SDL_FreeSurface(icon_surface);
 	}
 	
+#if !defined REDQUARK
 	if (renderer == nullptr)
 	{
+        // This is used by GUI too
 		renderer = SDL_CreateRenderer(sdl_window, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_PRESENTVSYNC);
 		check_error_sdl(renderer == nullptr, "Unable to create a renderer:");
 	}
+#endif
 	
 	if (SDL_SetHint(SDL_HINT_GRAB_KEYBOARD, "1") != SDL_TRUE)
 		write_log("SDL2: could not grab the keyboard!\n");
@@ -462,7 +1037,7 @@ int graphics_setup(void)
 	
 	currprefs.gfx_apmode[1].gfx_refreshrate = host_hz;
 
-#ifndef USE_DISPMANX
+#if !defined USE_DISPMANX && !defined REDQUARK
 	if (amiberry_options.use_sdl2_render_thread)
 	{
 #endif
@@ -477,7 +1052,7 @@ int graphics_setup(void)
 			uae_start_thread(_T("display thread"), display_thread, nullptr, &display_tid);
 		}
 		write_comm_pipe_u32(display_pipe, DISPLAY_SIGNAL_SETUP, 1);
-#ifndef USE_DISPMANX		
+#if !defined USE_DISPMANX && !defined REDQUARK
 	}
 #endif
 
@@ -487,7 +1062,7 @@ int graphics_setup(void)
 void update_win_fs_mode(struct uae_prefs* p)
 {
 	auto* avidinfo = &adisplays.gfxvidinfo;
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX || defined REDQUARK
 	// Dispmanx modes use configurable width/height and are fullwindow always
 	p->gfx_monitor.gfx_size = p->gfx_monitor.gfx_size_win;
 #else
@@ -548,7 +1123,7 @@ void update_win_fs_mode(struct uae_prefs* p)
 
 void toggle_fullscreen(int mode)
 {
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX || defined REDQUARK
 	// Dispmanx is full-window always
 #else
 	auto* const ad = &adisplays;
@@ -616,6 +1191,27 @@ static void wait_for_display_thread(void)
 		usleep(10);
 }
 
+#if defined REDQUARK
+void show_gui()
+{
+    if( !display_pipe ) return;
+	wait_for_display_thread();
+	write_comm_pipe_u32(display_pipe, DISPLAY_SIGNAL_GUI_SHOW, 1);
+#ifdef KEEP_HOST_CURSOR
+    SDL_ShowCursor(SDL_ENABLE);
+    SDL_SetRelativeMouseMode(SDL_FALSE);
+#endif 
+}
+
+void open_gui()
+{
+    if( !display_pipe ) return;
+	wait_for_display_thread();
+	write_comm_pipe_u32(display_pipe, DISPLAY_SIGNAL_GUI_OPEN, 1);
+	uae_sem_wait(&display_sem);
+}
+#endif
+
 void allocsoftbuffer(struct vidbuffer* buf, int width, int height, int depth)
 {
 	/* Initialize structure for Amiga video modes */
@@ -644,11 +1240,11 @@ void graphics_subshutdown()
 	if (display_tid != nullptr) {
 		wait_for_display_thread();
 		write_comm_pipe_u32(display_pipe, DISPLAY_SIGNAL_SUBSHUTDOWN, 1);
-		uae_sem_wait(&display_sem);
+		uae_sem_wait(&display_sem); // Wait for shutdown complete (in thread) 
 	}
 	reset_sound();
 
-#ifndef USE_DISPMANX
+#if !defined USE_DISPMANX && !defined REDQUARK
 	if (texture != nullptr)
 	{
 		SDL_DestroyTexture(texture);
@@ -660,6 +1256,8 @@ void graphics_subshutdown()
 	{
 		SDL_FreeSurface(screen);
 		screen = nullptr;
+		SDL_FreeSurface(copy_screen);
+		copy_screen = nullptr;
 	}
 }
 
@@ -775,13 +1373,13 @@ static void open_screen(struct uae_prefs* p)
 
 	update_win_fs_mode(p);
 	
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX || defined REDQUARK
 	next_synctime = 0;
 	current_resource_amigafb = 0;
 
 	write_comm_pipe_u32(display_pipe, DISPLAY_SIGNAL_OPEN, 1);
-	uae_sem_wait(&display_sem);
-
+	uae_sem_wait(&display_sem); // Wait for display open notificaiton
+    
 	vsync_counter = 0;
 	current_vsync_frame = 2;
 #else
@@ -820,8 +1418,6 @@ static void open_screen(struct uae_prefs* p)
 	}
 	else
 	{
-		//display_depth = 16;
-		//pixel_format = SDL_PIXELFORMAT_RGB565;
 		display_depth = 32;
 		pixel_format = SDL_PIXELFORMAT_RGBA32;
 		int width, height;
@@ -936,7 +1532,7 @@ void flush_screen(struct vidbuffer* vidbuffer, int ystart, int ystop)
 void update_display(struct uae_prefs* p)
 {
 	open_screen(p);
-	set_mouse_grab(true);
+    set_mouse_grab(true);
 }
 
 void graphics_reset(bool forced)
@@ -1349,6 +1945,19 @@ int check_prefs_changed_gfx()
 		return 1;
 	}
 
+#if defined REDQUARK
+	if( currprefs.force_jit != changed_prefs.force_jit ) {
+        if( changed_prefs.force_jit == false ){
+            currprefs.cachesize = 0;
+            currprefs.compfpu = false;
+        } else {
+            currprefs.cachesize = MAX_JIT_CACHE;
+            currprefs.compfpu = true;
+        }
+	    currprefs.force_jit = changed_prefs.force_jit;
+    }
+#endif
+
 	return 0;
 }
 
@@ -1371,12 +1980,112 @@ void unlockscr(struct vidbuffer* vb, int y_start, int y_end)
 	//SDL_UnlockTexture(texture);
 }
 
+#if defined USE_DISPMANX
+void wait_for_vsync()
+{
+	const auto start = read_processor_time();
+	const auto wait_till = current_vsync_frame;
+	do
+	{
+		usleep(10);
+		current_vsync_frame = vsync_counter;
+	} while (wait_till >= current_vsync_frame && read_processor_time() - start < 20000);
+}
+#endif
+
 bool render_screen(bool immediate)
 {
-	if (savestate_state == STATE_DOSAVE)
+#if defined REDQUARK
+#define SAVE_STATE_DELAY_FRAMES 2
+
+    virtual_keyboard_process( );
+
+    // Straight after boot, see if JIT is to be enabled, and do so.
+    // Admittedly, this is a bit of a hack, but there didn't seem to be a reliable way to make
+    // sure JIT was turned on and functioning correctly following a savestate restore.
+    //
+    static int frames_until_jit_flip = 5;
+    if( currprefs.force_jit && frames_until_jit_flip && (--frames_until_jit_flip == 0) ) {
+        changed_prefs.cachesize = MAX_JIT_CACHE;
+        changed_prefs.compfpu = true;
+        set_config_changed();
+    }
+
+    //
+	if ( savestate_then_quit != 0 ) {
+        // FIXME This would be much cleaner as a state machine
+
+        // If we're saving state due to exiting the emulator, first fade out audio to avoid "machine gun"
+        // stutter when audio buffer fill stalls during savestate/config/png write to filesystem.
+        if( vol_to_quit == -1 ) {
+            vol_to_quit = get_volume();
+            delay_savestate_frame = SAVE_STATE_DELAY_FRAMES;
+        }
+
+        vol_to_quit = vol_to_quit >= 10 ? vol_to_quit - 10 : 0; 
+
+        if( vol_to_quit == 0 ) {
+            // Done fading. Make sure sound buffer is filled with silence by muting
+            // and waiting for assurance that silence has been played, or for a few frames.
+            static int mute_frames = -1;
+            if( mute_frames > 0 ) mute_frames--;
+            if( mute_frames < 0 ) {
+                mute_frames = 4;
+                sound_mute(1);
+            }
+            if( sound_get_silence() > 0 || mute_frames == 0 ) {
+                // Now a frame of silence has been written to output device, we can set up
+                // the savestate and count 'delay_savestate_frame's before taking snapshot.
+
+                // Saving machine state with JIT enabled does not restore correctly (it looks on, but it's not!)
+                // So disable JIT, do the snapshot and config save. The force_jit config item will make sure
+                // jit is re-enabled several frames after restoring the snapshot (see above).
+                if( delay_savestate_frame == SAVE_STATE_DELAY_FRAMES ) {
+                    if( currprefs.force_jit ) {
+                        changed_prefs.cachesize = currprefs.cachesize = 0;
+                        changed_prefs.compfpu = currprefs.compfpu = false;
+                    }
+                }
+
+                // Set up save state saving
+                savestate_state = STATE_DOSAVE;
+                delay_savestate_frame--;
+            }
+        }
+        else set_volume( vol_to_quit );
+
+        if( delay_savestate_frame == 0 ) {
+            // Take the snapshot
+            write_log("Writing restore files %s %s %s\n", RESTORE_SHOT_FILE, RESTORE_STATE_FILE, RESTORE_CONFIG_FILE);
+
+            mkdir(RESTORE_BASE_DIR, 0777);
+
+            // Save the current program state for possible resumption
+            savestate_initsave( RESTORE_STATE_FILE );
+            save_state(savestate_fname, "Restore point");
+
+            strcpy( screenshot_filename, RESTORE_SHOT_FILE );
+
+            create_screenshot();
+            save_thumb(screenshot_filename);
+            savestate_state = 0;
+
+            // Override the description (we're exiting anyway)
+            strncpy( currprefs.description, "Redquark Six state resume config", sizeof(currprefs.description) - 1);
+
+            cfgfile_save( &currprefs, RESTORE_CONFIG_FILE, 0 );
+
+            quit_program = savestate_then_quit;
+            savestate_then_quit = 0;
+        }
+    }
+    else
+#endif
+	if (savestate_state == STATE_DOSAVE )
 	{
-		if (delay_savestate_frame > 0)
+        if (delay_savestate_frame > 0) {
 			--delay_savestate_frame;
+        }
 		else
 		{
 			create_screenshot();
@@ -1391,8 +2100,51 @@ bool render_screen(bool immediate)
 void show_screen(int mode)
 {
 	const auto start = read_processor_time();
+    static unsigned long ft = 0;
+    static unsigned long ft_inc = 0;
+    static auto ave_ft = 0;
+    
+#ifdef REPORT_FRAME_TIME
+    static unsigned long ic = 0;
+    static auto sfc = 0;
+    static unsigned long emu = 0;
+    if( ic ) emu += start - sfc;
+    int ave = ic ? emu / ic : 0;
+    if( ave > 21000)  { ave = 20000; emu = ave * ic; }
+
+    int tft = start - ft;
+    if( ic ) ft_inc += tft;
+    ft = start;
+    ave_ft = ic ? ft_inc / ic : 0;
+    if((ic % THR)==0) {
+        printf("Total frame time = %d  - Ave %d\n", tft, ave_ft );
+        ic = 0;
+        ft_inc = 0;
+    }
+
+    if(1){
+        static struct timeval old_time, now_time;
+        static unsigned long r_ave = 0;
+        static int ac = 0;
+
+        unsigned long diff = 0;
+        gettimeofday(&now_time, NULL);
+        if( old_time.tv_sec == 0 && old_time.tv_usec == 0 ) old_time = now_time;
+        diff = 1000000 * (now_time.tv_sec - old_time.tv_sec) + (now_time.tv_usec - old_time.tv_usec);
+        r_ave += diff;
+        if( ++ac && ic % THR == 0 ) {
+            printf("real frame time %ldus\n", r_ave / ac );
+            ac = 0;
+            r_ave = 0;
+        }
+        old_time = now_time;
+    }
+
+    if((ic++ % THR)==0) printf("\nEMU Frame took %d  - Ave %d   time per frame %d  Host %d Hz\n", start - sfc, ave, time_per_frame, host_hz );
+#endif
+
 		
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX
 	const auto wait_till = current_vsync_frame;
 	if (vsync_modulo == 1)
 	{
@@ -1404,7 +2156,8 @@ void show_screen(int mode)
 		} while (wait_till >= current_vsync_frame && read_processor_time() - start < 40000);
 		if (wait_till + 1 != current_vsync_frame)
 		{
-			// We missed a vsync...
+			// We missed a vsync... So reset next_synctime = now + time_per_frame
+            //                      else     next_synctime = last_sync + time_per_frame
 			next_synctime = 0;
 		}
 	}
@@ -1441,15 +2194,46 @@ void show_screen(int mode)
 		}
 	}
 
+    // If skipping frames...
 	if (currprefs.gfx_framerate == 2)
 		current_vsync_frame++;
-	
+#ifdef REPORT_FRAME_TIME
+    if(((ic-1) % THR)==0) printf("VSync wait took %d  (sync now %d)\n", read_processor_time() - start, current_vsync_frame );
+#endif
 #endif
 
-#ifdef USE_DISPMANX
+#ifdef REPORT_FRAME_TIME
+	const auto show_start = read_processor_time();
+#endif
+
+#if defined USE_DISPMANX
 	wait_for_display_thread();
 	flip_in_progess = true;
 	write_comm_pipe_u32(display_pipe, DISPLAY_SIGNAL_SHOW, 1);
+
+#elif defined REDQUARK
+    painting = 1;
+	flip_in_progess = true;
+    if( copy_screen ) memcpy( copy_screen->pixels, screen->pixels, copy_screen_size );
+	flip_in_progess = false;
+
+#  ifdef REPORT_FRAME_TIME
+    if(((ic-1) % THR)==0) printf("Prev vsync %lu  current vsync %lu\n", current_vsync_frame, vsync_counter );
+    if(((ic-1) % THR)==0) printf("show_queue_len = %d\n", show_queue_len );
+#  endif
+
+    if( (current_vsync_frame < vsync_counter) && (show_queue_len <= 2) ) {
+        // We met a vsync, so emit the next frame. If we missed vsync, we don't froce frame output to gl queue
+        write_comm_pipe_u32(display_pipe, DISPLAY_SIGNAL_SHOW, 1);
+        show_queue_len++;
+        current_vsync_frame = vsync_counter;
+    }
+    else 
+    {
+#  ifdef REPORT_FRAME_TIME
+        printf(">>> Skipped frame %d >= %d ||| queue_len %d > 2 <<<\n", current_vsync_frame, vsync_counter, show_queue_len );
+#  endif
+    }
 #else
 	if (amiberry_options.use_sdl2_render_thread)
 	{
@@ -1468,13 +2252,22 @@ void show_screen(int mode)
 #endif
 
 	last_synctime = read_processor_time();
+
+#ifdef REPORT_FRAME_TIME
+    if(((ic-1) % THR)==0) printf("Copy and DISPLAY_SIGNAL_SHOW took %d  (sync now %d)\n", last_synctime - show_start, current_vsync_frame );
+#endif
+
 	idletime += last_synctime - start;
 
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX || defined REDQUARK
 	if (last_synctime - next_synctime > time_per_frame - 5000)
 		next_synctime = last_synctime + time_per_frame * currprefs.gfx_framerate;
 	else
 		next_synctime = next_synctime + time_per_frame * currprefs.gfx_framerate;
+#endif
+
+#ifdef REPORT_FRAME_TIME
+    sfc = last_synctime;
 #endif
 }
 
@@ -1536,7 +2329,7 @@ static void graphics_subinit()
 
 static int red_bits, green_bits, blue_bits, alpha_bits;
 static int red_shift, green_shift, blue_shift, alpha_shift;
-static int alpha;
+static int alpha = 0;
 
 void init_colors()
 {
@@ -1549,6 +2342,10 @@ void init_colors()
 	blue_shift = mask_shift(screen->format->Bmask);
 	alpha_bits = bits_in_mask(screen->format->Amask);
 	alpha_shift = mask_shift(screen->format->Amask);
+
+#ifdef REDQUARK
+    alpha = 0xff;
+#endif
 
 	alloc_colors64k(red_bits, green_bits, blue_bits, red_shift, green_shift, blue_shift, alpha_bits, alpha_shift, alpha, 0, false);
 	notice_new_xcolors();
@@ -1608,11 +2405,13 @@ void graphics_leave()
 #ifdef USE_DISPMANX
 	bcm_host_deinit();
 #else
+#  if !defined REDQUARK
 	if (texture)
 	{
 		SDL_DestroyTexture(texture);
 		texture = nullptr;
 	}
+#  endif
 #endif
 	
 	if (renderer)
@@ -1641,6 +2440,7 @@ static int save_png(SDL_Surface* surface, char* path)
 {
 	const auto w = surface->w;
 	const auto h = surface->h;
+
 	auto* const pix = static_cast<unsigned char *>(surface->pixels);
 	unsigned char writeBuffer[1920 * 3];
 	auto* const f = fopen(path, "wbe");
@@ -1664,11 +2464,21 @@ static int save_png(SDL_Surface* surface, char* path)
 		return 0;
 	}
 
+    int scan_group_size = 1;
+    int png_h = h;
+
+#if defined REDQUARK
+    // We want 284 line high PNG's generated, so if double-lines are used, skip every other one.
+    // - Alternatively, we could generate 586 line sprites by doubling lines, but there's no real gain.
+    scan_group_size = (h <= 284) ? 1 : 2;
+    png_h = 284 * scan_group_size;
+#endif
+
 	png_init_io(png_ptr, f);
 	png_set_IHDR(png_ptr,
 		info_ptr,
 		w,
-		h,
+        png_h / scan_group_size,
 		8,
 		PNG_COLOR_TYPE_RGB,
 		PNG_INTERLACE_NONE,
@@ -1682,10 +2492,22 @@ static int save_png(SDL_Surface* surface, char* path)
 	const auto sizeY = h;
 	const auto depth = get_display_depth();
 
+#if defined REDQUARK
+    // Make sure PNG is png_h high and image is centred in the middle
+    // The image may have uneven top and bottom borders, so may still look too far up or down with the added margins.
+    int margin = (sizeY < png_h) ? (png_h - sizeY) : 0;
+
+    memset( writeBuffer, 0, sizeX * 3 );
+    for (auto by = 0; by < ceil((float)margin/2.0); by += scan_group_size )
+    {
+        png_write_row(png_ptr, writeBuffer);
+    }
+#endif
+
 	if (depth <= 16)
 	{
 		auto* p = reinterpret_cast<unsigned short*>(pix);
-		for (auto y = 0; y < sizeY; y++)
+		for (auto y = 0; y < sizeY; y++ )
 		{
 			for (auto x = 0; x < sizeX; x++)
 			{
@@ -1696,14 +2518,14 @@ static int save_png(SDL_Surface* surface, char* path)
 				*b++ = ((v & SYSTEM_BLUE_MASK) >> SYSTEM_BLUE_SHIFT) << 3; // B
 			}
 			p += surface->pitch / 2;
-			png_write_row(png_ptr, writeBuffer);
+			if( !(y % scan_group_size) ) png_write_row(png_ptr, writeBuffer);
 			b = writeBuffer;
 		}
 	}
 	else
 	{
 		auto* p = reinterpret_cast<unsigned int*>(pix);
-		for (auto y = 0; y < sizeY; y++) {
+		for (auto y = 0; y < sizeY; y++ ) {
 			for (auto x = 0; x < sizeX; x++) {
 				auto v = p[x];
 
@@ -1712,10 +2534,18 @@ static int save_png(SDL_Surface* surface, char* path)
 				*b++ = ((v & SYSTEM_BLUE_MASK) >> SYSTEM_BLUE_SHIFT); // B
 			}
 			p += surface->pitch / 4;
-			png_write_row(png_ptr, writeBuffer);
+			if( !(y % scan_group_size) ) png_write_row(png_ptr, writeBuffer);
 			b = writeBuffer;
 		}
 	}
+
+#if defined REDQUARK
+    memset( writeBuffer, 0, sizeX * 3 );
+    for (auto by = 0; by < floor((float)margin/2.0f); by += scan_group_size )
+    {
+        png_write_row(png_ptr, writeBuffer);
+    }
+#endif
 
 	png_write_end(png_ptr, info_ptr);
 	png_destroy_write_struct(&png_ptr, &info_ptr);
@@ -1763,7 +2593,7 @@ static int save_thumb(char* path)
 	return ret;
 }
 
-#ifdef USE_DISPMANX	
+#if defined USE_DISPMANX || defined REDQUARK
 static int currVSyncRate = 0;
 #endif
 bool vsync_switchmode(int hz)
@@ -1789,14 +2619,12 @@ bool vsync_switchmode(int hz)
 	else
 		hz = 50;
 	
-#ifdef USE_DISPMANX	
+#if defined USE_DISPMANX || defined REDQUARK
 	if (hz != currVSyncRate)
 	{
 		currVSyncRate = hz;
 		fpscounter_reset();
-
 		time_per_frame = 1000 * 1000 / (hz);
-
 		if (hz == host_hz)
 			vsync_modulo = 1;
 		else if (hz > host_hz)
@@ -1904,7 +2732,7 @@ bool target_graphics_buffer_update()
 	if (rate_changed)
 	{
 		fpscounter_reset();
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX || defined REDQUARK
 		time_per_frame = 1000 * 1000 / currprefs.chipset_refreshrate;
 #endif
 	}
@@ -1928,6 +2756,9 @@ int picasso_palette(struct MyCLUTEntry *CLUT, uae_u32 *clut)
 			| doMask256 (0xff, alpha_bits, alpha_shift);
 		if (v != clut[i]) {
 			//write_log (_T("%d:%08x\n"), i, v);
+
+            // printf(_T("%d:%08x\n"), i, v);
+           
 			clut[i] = v;
 			changed = 1;
 		}
@@ -2044,6 +2875,9 @@ void gfx_set_picasso_state(int on)
 	screen_is_picasso = on;
 
 	black_screen_now();
+
+    printdbg("Picasso %s\n", on ? "on" : "off");
+
 	open_screen(&currprefs);
 }
 
@@ -2051,14 +2885,19 @@ void gfx_set_picasso_modeinfo(uae_u32 w, uae_u32 h, uae_u32 depth, RGBFTYPE rgbf
 {
 	if (!screen_is_picasso)
 		return;
+
+    printdbg("gfx_set_picasso_modeinfo: %d x %d @ %d  fmt 0x%x\n", w, h, depth, rgbfmt );
+
 	black_screen_now();
 	gfx_set_picasso_colors(rgbfmt);
 
 	if (static_cast<unsigned>(picasso_vidinfo.width) == w &&
 		static_cast<unsigned>(picasso_vidinfo.height) == h &&
 		static_cast<unsigned>(picasso_vidinfo.depth) == depth &&
-		picasso_vidinfo.selected_rgbformat == rgbfmt)
+		picasso_vidinfo.selected_rgbformat == rgbfmt) {
+        printdbg("No mode change\n");
 		return;
+    }
 
 	picasso_vidinfo.selected_rgbformat = rgbfmt;
 	picasso_vidinfo.width = w;

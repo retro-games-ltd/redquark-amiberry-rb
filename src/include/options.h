@@ -106,6 +106,7 @@ struct joypad_map_layout
 
 #define MAX_JPORTS_CUSTOM 6
 #define MAX_JPORTS 4
+#define MAX_JPORTS_TOTAL (MAX_JPORTS_CUSTOM + MAX_JPORTS)
 #define NORMAL_JPORTS 2
 #define MAX_JPORT_NAME 128
 #define MAX_JPORT_CONFIG 256
@@ -137,6 +138,9 @@ struct jport
 	struct joypad_map_layout amiberry_custom_hotkey;
 	struct joypad_map_layout amiberry_custom_left_trigger;
 	struct joypad_map_layout amiberry_custom_right_trigger;
+#endif
+#ifdef REDQUARK
+    int hotbutton;
 #endif
 };
 
@@ -537,6 +541,9 @@ struct whdbooter
 	bool buttonwait;
 	TCHAR slave[4096];
 	bool showsplash;
+#ifdef REDQUARK
+    bool writecache;
+#endif
 };
 #endif
 
@@ -599,6 +606,9 @@ struct uae_prefs
 	bool sound_auto;
 	bool sound_cdaudio;
 	bool sound_volcnt;
+#if defined REDQUARK
+    bool sound_pullmode;
+#endif
 
 	int sampler_freq;
 	int sampler_buffer;
@@ -614,6 +624,9 @@ struct uae_prefs
 	bool comp_constjump;
 	bool comp_catchfault;
 	int cachesize;
+#if defined REDQUARK
+    bool force_jit;
+#endif
 	bool fpu_strict;
 	int fpu_mode;
 
@@ -630,6 +643,13 @@ struct uae_prefs
 	int gfx_lores_mode;
 	int gfx_pscanlines, gfx_iscanlines;
 	int gfx_xcenter, gfx_ycenter;
+#if defined REDQUARK
+    int gfx_dynamic_scale;
+    int gfx_dynamic_top;
+    int gfx_dynamic_height;
+    int gfx_dynamic_safe_zone;
+    TCHAR *bind_joysticks[MAX_JPORTS_TOTAL + 1];
+#endif
 	int gfx_xcenter_pos, gfx_ycenter_pos;
 	int gfx_xcenter_size, gfx_ycenter_size;
 	int gfx_max_horizontal, gfx_max_vertical;
@@ -686,6 +706,10 @@ struct uae_prefs
 	struct wh osd_pos;
 	int keyboard_leds[3];
 	bool keyboard_leds_in_use;
+#ifdef REDQUARK
+	TCHAR disk_led_gpio[MAX_DPATH];
+	TCHAR power_led_gpio[MAX_DPATH];
+#endif
 	int scsi;
 	bool sana2;
 	bool uaeserial;
@@ -918,6 +942,9 @@ struct uae_prefs
 	int input_analog_joystick_offset;
 	int input_autofire_linecnt;
 	int input_mouse_speed;
+#ifdef REDQUARK
+	int input_mouse_sensitivity;
+#endif
 	int input_tablet;
 	bool tablet_library;
 	int input_mouse_untrap;
@@ -944,9 +971,12 @@ struct uae_prefs
 	// probably can be removed now? unless they are used by the new whd selector
 	TCHAR whdload_path[MAX_DPATH];
 	TCHAR whdload_file[MAX_DPATH];
-
+#if defined REDQUARK
+    bool save_state_on_exit;
+    int ignore_keycodes[ MAX_INPUT_DEVICE_EVENTS ];
+    bool ignore_gui;
+#endif
 	struct whdbooter whdbootprefs;
-
 #endif
 
 	/* ANDROID */

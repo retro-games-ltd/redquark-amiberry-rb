@@ -36,7 +36,9 @@
 #endif
 #include "uae.h"
 
+#ifndef CPU_AMD64
 #include <asm/sigcontext.h>
+#endif
 #include <signal.h>
 #include <dlfcn.h>
 #ifndef ANDROID
@@ -669,6 +671,7 @@ void signal_segv(int signum, siginfo_t* info, void* ptr)
 	trace_end();
 #endif
 
+#ifndef CPU_AMD64
 	mcontext_t* context = &(ucontext->uc_mcontext);
 
 	unsigned long* regs = &context->arm_r0;
@@ -777,6 +780,7 @@ void signal_segv(int signum, siginfo_t* info, void* ptr)
 
 	if (handled != HANDLE_EXCEPTION_NONE)
 		return;
+#endif
 
 	SDL_Quit();
 	exit(1);
@@ -796,6 +800,7 @@ void signal_buserror(int signum, siginfo_t* info, void* ptr)
 
 	mcontext_t* context = &(ucontext->uc_mcontext);
 
+#ifndef CPU_AMD64
 	unsigned long* regs = &context->arm_r0;
 	uintptr_t addr = (uintptr_t)info->si_addr;
 
@@ -874,6 +879,7 @@ void signal_buserror(int signum, siginfo_t* info, void* ptr)
 		output_log(_T("%s\n"), strings[i]);
 	output_log(_T("End of stack trace.\n"));
 
+#endif
 	output_log(_T("--- end exception ---\n"));
 
 	SDL_Quit();

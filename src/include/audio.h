@@ -40,6 +40,10 @@ void audio_deactivate (void);
 void audio_vsync (void);
 void audio_sampleripper(int);
 void write_wavheader (struct zfile *wavfile, uae_u32 size, uae_u32 freq);
+#ifdef REDQUARK
+void set_volume (int);
+int  get_volume (void);
+#endif
 
 int audio_is_pull(void);
 int audio_pull_buffer(void);

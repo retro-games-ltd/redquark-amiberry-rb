@@ -10,6 +10,12 @@
 #define DISPLAY_SIGNAL_SHOW 				4
 #define DISPLAY_SIGNAL_QUIT 				5
 
+#if defined REDQUARK
+#define DISPLAY_SIGNAL_GUI_OPEN 			6
+#define DISPLAY_SIGNAL_GUI_SHOW 			7
+#define DISPLAY_SIGNAL_PAINT                8
+#endif
+
 #ifdef USE_DISPMANX
 #include <bcm_host.h>
 extern DISPMANX_DISPLAY_HANDLE_T displayHandle;
@@ -37,5 +43,13 @@ extern SDL_Rect renderQuad;
 
 extern void check_error_sdl(bool check, const char* message);
 extern void toggle_fullscreen();
+extern int redquark_screen_init();
+
+#if defined REDQUARK
+extern int savestate_then_quit;
+extern int delay_savestate_frame;
+extern char* screenshot_filename;
+#endif // REDQUARK
+
 extern void DX_Fill(int dstx, int dsty, int width, int height, uae_u32 color);
 extern void update_win_fs_mode(struct uae_prefs* p);

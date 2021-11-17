@@ -269,4 +269,11 @@ extern void savestate_listrewind (void);
 extern void statefile_save_recording (const TCHAR*);
 extern void savestate_capture_request (void);
 
+#if defined REDQUARK
+#define RESTORE_BASE_DIR    "/tmp/amiberry/"
+#define RESTORE_STATE_FILE  RESTORE_BASE_DIR "restore.uss"
+#define RESTORE_SHOT_FILE   RESTORE_BASE_DIR "restore.png"
+#define RESTORE_CONFIG_FILE RESTORE_BASE_DIR "restore.uae"
+#endif
+
 #endif /* UAE_SAVESTATE_H */

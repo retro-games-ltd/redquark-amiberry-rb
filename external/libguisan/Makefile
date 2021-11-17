@@ -1,6 +1,6 @@
 TARGET  = lib/libguisan.a
   
-AR      = ar
+AR      ?= ar
 
 DIRS	=$(shell find ./src -maxdepth 3 -type d)
 SOURCE	= $(foreach dir,$(DIRS),$(wildcard $(dir)/*.cpp))
@@ -10,7 +10,7 @@ DEPS	= $(SOURCE:%.cpp=%.d)
 CPPFLAGS +=-I./include $(SDL_CFLAGS) -MD -MT $@ -MF $(@:%.o=%.d)
   
 .PHONY : all clean
-  
+
 $(TARGET) : $(OBJS)
 	$(AR) cr $(TARGET) $(OBJS)
 

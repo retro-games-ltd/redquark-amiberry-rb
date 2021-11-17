@@ -315,6 +315,9 @@ void InitPanelPaths(const struct _ConfigCategory& category)
 	cmdRescanROMs->setId("RescanROMs");
 	cmdRescanROMs->addActionListener(rescanROMsButtonActionListener);
 
+	category.panel->add(cmdRescanROMs, DISTANCE_BORDER, category.panel->getHeight() - BUTTON_HEIGHT - DISTANCE_BORDER);
+
+#ifndef REDQUARK
 	downloadXMLButtonActionListener = new DownloadXMLButtonActionListener();
 	cmdDownloadXML = new gcn::Button("Update WHDLoad XML");
 	cmdDownloadXML->setSize(cmdDownloadXML->getWidth() + DISTANCE_BORDER, BUTTON_HEIGHT);
@@ -322,9 +325,9 @@ void InitPanelPaths(const struct _ConfigCategory& category)
 	cmdDownloadXML->setId("DownloadXML");
 	cmdDownloadXML->addActionListener(downloadXMLButtonActionListener);
 
-	category.panel->add(cmdRescanROMs, DISTANCE_BORDER, category.panel->getHeight() - BUTTON_HEIGHT - DISTANCE_BORDER);
 	category.panel->add(cmdDownloadXML, DISTANCE_BORDER + cmdRescanROMs->getWidth() + 20,
 	                    category.panel->getHeight() - BUTTON_HEIGHT - DISTANCE_BORDER);
+#endif
 
 	RefreshPanelPaths();
 }

@@ -4592,11 +4592,16 @@ static void copyall(uae_u8* src, uae_u8* dst, int pwidth, int pheight, int srcby
 	struct picasso96_state_struct* state = &picasso96_state;
 	if (state->RGBFormat == RGBFB_CLUT) 
 	{
+#if defined __x86_64__ || defined __x86__
+        for (auto y = 0; y < pheight; y++)
+            copyrow (src, dst, 0, y, pwidth, srcbytesperrow, srcpixbytes, 0, y, dstbytesperrow, dstpixbytes, direct, mode_convert, p96_rgbx16);
+#else
 		const auto pixels = state->Width * state->Height;
 		if (vidinfo->pixbytes == 2)
 			copy_screen_8bit_to_16bit(dst, src, pixels, vidinfo->clut);
 		else
 			copy_screen_8bit_to_32bit(dst, src, pixels, vidinfo->clut);
+#endif
 	}
 	else
 	{

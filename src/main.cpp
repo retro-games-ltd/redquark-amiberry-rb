@@ -36,7 +36,9 @@
 #include "blkdev.h"
 #include "gfxboard.h"
 #include "devices.h"
-#include "jit/compemu.h"
+#ifdef JIT
+#  include "jit/compemu.h"
+#endif
 #include <iostream>
 
 #include <linux/kd.h>
@@ -339,6 +341,15 @@ void fixup_prefs(struct uae_prefs* p, bool userconfig)
 	for (auto& rtgboard : p->rtgboards)
 	{
 		auto* const rbc = &rtgboard;
+#ifdef REDQUARK
+		if (rbc->rtgmem_size > max_rtgmem && rbc->rtgmem_type == GFXBOARD_UAE_Z3)
+		{
+			error_log(
+				_T("Graphics card memory size %d (0x%x) larger than maximum reserved %d (0x%x)."), rbc->rtgmem_size,
+				rbc->rtgmem_size, max_rtgmem, max_rtgmem);
+			rbc->rtgmem_size = max_rtgmem;
+		}
+#else
 		if (rbc->rtgmem_size > max_z3fastmem && rbc->rtgmem_type == GFXBOARD_UAE_Z3)
 		{
 			error_log(
@@ -346,12 +357,19 @@ void fixup_prefs(struct uae_prefs* p, bool userconfig)
 				rbc->rtgmem_size, 0x1000000, 0x1000000);
 			rbc->rtgmem_size = 0x1000000;
 		}
+#endif
 
 		if ((rbc->rtgmem_size & rbc->rtgmem_size - 1) != 0 || (rbc->rtgmem_size != 0 && rbc->rtgmem_size < 0x100000))
 		{
 			error_log(_T("Unsupported graphics card memory size %d (0x%x)."), rbc->rtgmem_size, rbc->rtgmem_size);
+#ifdef REDQUARK
+			if (rbc->rtgmem_size > max_rtgmem)
+				rbc->rtgmem_size = max_rtgmem;
+#else
 			if (rbc->rtgmem_size > max_z3fastmem)
 				rbc->rtgmem_size = max_z3fastmem;
+#endif
+
 			else
 				rbc->rtgmem_size = 0;
 		}
@@ -460,7 +478,7 @@ void fixup_prefs(struct uae_prefs* p, bool userconfig)
 	if (p->socket_emu) {
 		write_log(_T("Compile-time option of BSDSOCKET_SUPPORTED was not enabled.  You can't use bsd-socket emulation.\n"));
 		p->socket_emu = 0;
-		err = 1;
+		//err = 1;
 	}
 #endif
 	if (p->socket_emu && p->uaeboard >= 3) {
@@ -605,6 +623,9 @@ void fixup_prefs(struct uae_prefs* p, bool userconfig)
 	cfgfile_createconfigstore(p);
 }
 
+#if defined REDQUARK
+static int quitting = 0;
+#endif
 int quit_program = 0;
 static int restart_program;
 static TCHAR restart_config[MAX_DPATH];
@@ -624,6 +645,11 @@ void uae_reset(int hardreset, int keyboardreset)
 
 void uae_quit(void)
 {
+#if defined REDQUARK
+    if( quitting ) return;
+    quitting = 1;
+#endif
+
 	if (quit_program != -UAE_QUIT)
 		quit_program = -UAE_QUIT;
 	target_quit();
@@ -633,6 +659,10 @@ void uae_quit(void)
 void uae_restart(int opengui, const TCHAR* cfgfile)
 {
 	uae_quit();
+#if defined REDQUARK
+    return; // Restarting locks up the opengl/mali, so just quit.
+    //quitting = 0;
+#endif
 	restart_program = opengui > 0 ? 1 : (opengui == 0 ? 2 : 3);
 	restart_config[0] = 0;
 	default_config = 0;
@@ -787,7 +817,43 @@ static void parse_cmdline(int argc, TCHAR** argv)
 			auto* txt = parse_text_path(argv[i] + 13);
 			parse_diskswapper(txt);
 			xfree(txt);
+			//firstconfig = false;
+			//loaded = true;
 		}
+#if defined REDQUARK
+		else if (_tcsncmp(argv[i], _T("-restore"), 7) == 0)
+		{
+			const auto txt = parse_text_path( RESTORE_CONFIG_FILE);
+			currprefs.mountitems = 0;
+			target_cfgfile_load(&currprefs, txt,
+			                    firstconfig
+				                    ? CONFIG_TYPE_ALL
+				                    : CONFIG_TYPE_HARDWARE | CONFIG_TYPE_HOST | CONFIG_TYPE_NORESET, 0);
+			xfree(txt);
+			firstconfig = false;
+			loaded = true;
+	        currprefs.start_gui = false;
+		}
+		else if (_tcsncmp(argv[i], _T("-ssoe"), 5) == 0) // also -s amiberry.save_state_on_exit=true
+		{
+	        currprefs.save_state_on_exit = true;
+		}
+		else if (_tcscmp(argv[i], _T("--config-overlay")) == 0 )
+		{
+			if (i + 1 == argc)
+				write_log(_T("Missing argument for '--config-overlay' option.\n"));
+			else
+			{
+                // Load a partial config file over what is already in place. This allows
+                // selected parameters to be changed if the --config-overlay occurs _after_ --config or
+                // --autoload on the command line.
+				auto* const txt = parse_text_path(argv[++i]);
+                auto config_type = CONFIG_TYPE_HARDWARE | CONFIG_TYPE_HOST | CONFIG_TYPE_NORESET;
+                cfgfile_load(&currprefs, txt, &config_type, 0, 1);
+				xfree(txt);
+			}
+		}
+#endif
 		else if (_tcsncmp(argv[i], _T("-cfgparam="), 10) == 0) {
 			;
 		}
@@ -1113,7 +1179,7 @@ void check_error_sdl(const bool check, const char* message)
 static int real_main2(int argc, TCHAR** argv)
 {
 	if (
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX || defined REDQUARK
 		SDL_Init(SDL_INIT_TIMER
 			| SDL_INIT_AUDIO
 			| SDL_INIT_JOYSTICK
@@ -1128,7 +1194,11 @@ static int real_main2(int argc, TCHAR** argv)
 		printf("SDL could not initialize! SDL_Error: %s\n", SDL_GetError());
 		abort();
 	}
-		
+
+#if defined REDQUARK
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+#endif
+
 	keyboard_settrans();
 	set_config_changed();
 	if (restart_config[0])
@@ -1195,6 +1265,7 @@ static int real_main2(int argc, TCHAR** argv)
 			return 1;
 		}
 	}
+    else emulating = 1;
 
 	memset(&gui_data, 0, sizeof gui_data);
 	gui_data.cd = -1;
@@ -1240,7 +1311,9 @@ static int real_main2(int argc, TCHAR** argv)
 	reset_frame_rate_hack();
 	init_m68k(); /* must come after reset_frame_rate_hack (); */
 
+#ifndef AMIBERRY /* Calling gui_update destroys whatever savestate_fname is set to from the command line */
 	gui_update();
+#endif
 
 	if (graphics_init(true))
 	{

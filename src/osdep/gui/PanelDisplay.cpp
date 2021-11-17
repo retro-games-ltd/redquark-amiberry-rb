@@ -76,6 +76,9 @@ static gcn::Label* lblFullscreen;
 static gcn::DropDown* cboFullscreen;
 
 static gcn::Window* grpCentering;
+#if defined REDQUARK
+static gcn::CheckBox* chkDynamic;
+#endif
 static gcn::CheckBox* chkHorizontal;
 static gcn::CheckBox* chkVertical;
 static gcn::CheckBox* chkFlickerFixer;
@@ -179,6 +182,15 @@ public:
 
 		else if (actionEvent.getSource() == chkVertical)
 			changed_prefs.gfx_ycenter = chkVertical->isSelected() ? 2 : 0;
+#if defined REDQUARK
+		else if (actionEvent.getSource() == chkDynamic)
+        {
+            int b = chkDynamic->isSelected();
+	        chkHorizontal->setSelected(b);
+	        chkVertical->setSelected(b);
+			changed_prefs.gfx_dynamic_scale = changed_prefs.gfx_dynamic_scale = b ? 1 : 0;
+        }
+#endif
 
 		else if (actionEvent.getSource() == chkFlickerFixer)
 			changed_prefs.gfx_scandoubler = chkFlickerFixer->isSelected();
@@ -346,6 +358,10 @@ void InitPanelDisplay(const struct _ConfigCategory& category)
 	chkVertical = new gcn::CheckBox("Vertical");
 	chkVertical->setId("chkVertical");
 	chkVertical->addActionListener(amigaScreenActionListener);
+#if defined REDQUARK
+	chkDynamic = new gcn::CheckBox("Dynamic");
+	chkDynamic->addActionListener(amigaScreenActionListener);
+#endif
 
 	chkFlickerFixer = new gcn::CheckBox("Remove interlace artifacts");
 	chkFlickerFixer->setId("chkFlickerFixer");
@@ -428,7 +444,19 @@ void InitPanelDisplay(const struct _ConfigCategory& category)
 	grpCentering->setPosition(DISTANCE_BORDER + grpAmigaScreen->getWidth() + DISTANCE_NEXT_X, DISTANCE_BORDER);
 	grpCentering->add(chkHorizontal, DISTANCE_BORDER, DISTANCE_BORDER);
 	grpCentering->add(chkVertical, DISTANCE_BORDER, chkHorizontal->getY() + chkHorizontal->getHeight() + DISTANCE_NEXT_Y);
+#if defined REDQUARK
+#   define SPACE 2
+	grpCentering->add(chkDynamic, DISTANCE_BORDER, chkHorizontal->getY() + chkHorizontal->getHeight() + DISTANCE_NEXT_Y * 3);
+#else
+#   define SPACE 0
+#endif
 	grpCentering->setMovable(false);
+	grpCentering->setSize(chkHorizontal->getX() + chkHorizontal->getWidth() + DISTANCE_BORDER * 2, posY + DISTANCE_BORDER + DISTANCE_NEXT_Y * SPACE);
+	grpCentering->setBaseColor(gui_baseCol);
+	category.panel->add(grpCentering);
+	
+	posY = DISTANCE_BORDER + grpAmigaScreen->getHeight() + DISTANCE_NEXT_Y * 3;
+
 	grpCentering->setSize(chkHorizontal->getX() + chkHorizontal->getWidth() + DISTANCE_BORDER * 5, TITLEBAR_HEIGHT + chkVertical->getY() + chkVertical->getHeight() + DISTANCE_NEXT_Y);
 	grpCentering->setTitleBarHeight(TITLEBAR_HEIGHT);
 	grpCentering->setBaseColor(gui_baseCol);
@@ -547,7 +575,9 @@ void ExitPanelDisplay()
 	delete chkVertical;
 	delete chkFlickerFixer;
 	delete grpCentering;
-
+#if defined REDQUARK
+	delete chkDynamic;
+#endif
 	delete chkBlackerThanBlack;
 	delete chkAspect;
 	delete lblScreenmode;
@@ -618,7 +648,9 @@ void RefreshPanelDisplay()
 	
 	chkHorizontal->setSelected(changed_prefs.gfx_xcenter == 2);
 	chkVertical->setSelected(changed_prefs.gfx_ycenter == 2);
-
+#if defined REDQUARK
+	chkDynamic->setSelected(changed_prefs.gfx_dynamic_scale != 0 );
+#endif
 	chkFlickerFixer->setSelected(changed_prefs.gfx_scandoubler);
 	chkBlackerThanBlack->setSelected(changed_prefs.gfx_blackerthanblack);
 	

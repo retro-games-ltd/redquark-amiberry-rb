@@ -28,6 +28,10 @@
 #include "newcpu.h"
 #include "target.h"
 
+#if defined REDQUARK
+int emulib_exit_request = 0;
+#endif
+
 /*
 * Returns UAE Version
 */
@@ -205,6 +209,9 @@ static uae_u32 emulib_InsertDisk(TrapContext* ctx, uaecptr name, uae_u32 drive)
 */
 static uae_u32 emulib_ExitEmu(void)
 {
+#if defined REDQUARK
+    emulib_exit_request = 1;
+#endif
 	uae_quit();
 	return 1;
 }

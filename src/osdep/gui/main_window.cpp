@@ -21,6 +21,14 @@
 
 #include "inputdevice.h"
 
+#if defined REDQUARK
+# include "malifb.h"
+# include <sys/mman.h>
+# include "threaddep/thread.h"
+void open_gui();
+void show_gui();
+#endif
+
 #if defined(ANDROID)
 #include "androidsdl_event.h"
 //#include <SDL_screenkeyboard.h>
@@ -130,9 +138,15 @@ DISPMANX_RESOURCE_HANDLE_T black_gui_resource;
 DISPMANX_ELEMENT_HANDLE_T gui_element;
 int element_present = 0;
 #else
+#  if defined REDQUARK
+extern smp_comm_pipe *volatile display_pipe;
+extern uae_sem_t display_sem;
+extern bool volatile display_thread_busy;
+#  else
 SDL_Texture* gui_texture;
 SDL_Cursor* cursor;
 SDL_Surface* cursor_surface;
+#  endif
 #endif
 
 /*
@@ -225,10 +239,13 @@ void cap_fps(Uint64 start, int fps)
 {
 	const auto end = SDL_GetPerformanceCounter();
 	const auto elapsed_ms = static_cast<float>(end - start) / static_cast<float>(SDL_GetPerformanceFrequency()) * 1000.0f;
+    float d = 0.0f;
 	if (fps == 60)
-		SDL_Delay(floor(16.666f - elapsed_ms));
+        d = floor(16.666f - elapsed_ms);
 	else if (fps == 50)
-		SDL_Delay(floor(20.000f - elapsed_ms));
+        d = floor(20.000f - elapsed_ms);
+
+    if( d > 0.0f ) SDL_Delay( d );
 }
 
 void update_gui_screen()
@@ -238,6 +255,8 @@ void update_gui_screen()
 	updateHandle = vc_dispmanx_update_start(0);
 	vc_dispmanx_element_change_source(updateHandle, gui_element, gui_resource);
 	vc_dispmanx_update_submit_sync(updateHandle);
+#elif defined REDQUARK
+    show_gui();
 #else
 	SDL_RenderClear(renderer);
 	SDL_UpdateTexture(gui_texture, nullptr, gui_screen->pixels, gui_screen->pitch);
@@ -251,7 +270,7 @@ void update_gui_screen()
 #endif
 }
 
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX || REDQUARK
 #else
 void setup_cursor()
 {
@@ -369,6 +388,9 @@ void amiberry_gui_init()
 
 		vc_dispmanx_update_submit_sync(updateHandle);
 	}
+#elif defined REDQUARK
+    open_gui();
+
 #else
 	setup_cursor();
 
@@ -451,6 +473,8 @@ void amiberry_gui_halt()
 	}
 	if (displayHandle)
 		vc_dispmanx_display_close(displayHandle);
+
+#elif defined REDQUARK
 #else
 	if (gui_texture != nullptr)
 	{

@@ -83,6 +83,8 @@ public:
 		if (actionEvent.getSource() == sldGfxmem)
 		{
 			changed_prefs.rtgboards[0].rtgmem_size = FastMem_values[static_cast<int>(sldGfxmem->getValue())];
+			if( changed_prefs.rtgboards[0].rtgmem_size > max_rtgmem )
+			    changed_prefs.rtgboards[0].rtgmem_size = max_rtgmem;
 			changed_prefs.rtgboards[0].rtgmem_type = GFXBOARD_UAE_Z3;
 		}
 

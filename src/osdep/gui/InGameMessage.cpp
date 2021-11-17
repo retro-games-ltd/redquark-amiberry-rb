@@ -101,6 +101,7 @@ void message_gui_halt()
 	}
 	if (displayHandle)
 		vc_dispmanx_display_close(displayHandle);
+#elif defined REDQUARK
 #else
 	if (msg_texture != nullptr)
 	{
@@ -120,6 +121,7 @@ void message_UpdateScreen()
 	updateHandle = vc_dispmanx_update_start(0);
 	vc_dispmanx_element_change_source(updateHandle, message_element, message_resource);
 	vc_dispmanx_update_submit_sync(updateHandle);
+#elif defined REDQUARK
 #else
 	SDL_UpdateTexture(msg_texture, nullptr, msg_screen->pixels, msg_screen->pitch);
 	SDL_RenderCopyEx(renderer, msg_texture, nullptr, nullptr, amiberry_options.rotation_angle, nullptr, SDL_FLIP_NONE);
@@ -327,6 +329,7 @@ void message_gui_init(const char* msg)
 
 		vc_dispmanx_update_submit_sync(updateHandle);
 	}
+#elif defined REDQUARK
 #else
 	// make the scaled rendering look smoother (linear scaling).
 	SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "linear");

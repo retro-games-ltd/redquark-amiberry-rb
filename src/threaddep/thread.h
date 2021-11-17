@@ -1,10 +1,10 @@
 /*
-  * UAE - The Un*x Amiga Emulator
-  * 
-  * Threading support, using SDL
-  * 
-  * Copyright 1997, 2001 Bernd Schmidt
-  */
+ * UAE - The Un*x Amiga Emulator
+ * 
+ * Threading support, using SDL
+ * 
+ * Copyright 1997, 2001 Bernd Schmidt
+ */
 
 #pragma once
 #include <SDL.h>
@@ -55,6 +55,7 @@ STATIC_INLINE void uae_end_thread(uae_thread_id* tid)
 STATIC_INLINE long uae_start_thread(const TCHAR* name, int (*f)(void*), void* arg, uae_thread_id* foo)
 {
 	auto result = 1;
+	//auto* id = SDL_CreateThread(f, name ? name : "StartThread", arg);
 	auto* id = SDL_CreateThread(f, "StartThread", arg);
 	if (id == nullptr)
 	{

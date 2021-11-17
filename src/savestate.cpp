@@ -63,6 +63,12 @@
 #include "devices.h"
 #include "fsdb.h"
 
+#ifdef REDQUARK
+#  define COMPRESS_STATE false //true
+#else
+#  define COMPRESS_STATE false
+#endif
+
 int savestate_state = 0;
 
 #ifdef SAVESTATE
@@ -746,6 +752,14 @@ error:
 void savestate_restore_final(void)
 {
 	restore_akiko_final();
+#ifdef REDQUARK
+    // Savestate restore is complete. If we were "resuming" a save-state-on-exit
+    //   or we're going to save a state on exit, remove the recovery snapshot.
+    //   This releases some memory as /tmp/ is tmpfs on the redquark platform.
+    if( currprefs.save_state_on_exit ) {
+        unlink(RESTORE_STATE_FILE);
+    }
+#endif
 }
 
 bool savestate_restore_finish(void)
@@ -1023,7 +1037,9 @@ int save_state (const TCHAR *filename, const TCHAR *description)
 {
 	struct zfile *f;
 
+#ifndef REDQUARK // save_state_on_exit will cause what look like incompatibilites, but aren't.
 	state_incompatible_warn();
+#endif
 	if (!save_filesys_cando()) {
 		gui_message (_T("Filesystem active. Try again later."));
 		return -1;
@@ -1032,7 +1048,7 @@ int save_state (const TCHAR *filename, const TCHAR *description)
 	f = zfile_fopen (filename, _T("w+b"), 0);
 	if (!f)
 		return 0;
-	int v = save_state_internal (f, description, false, true);
+	int v = save_state_internal (f, description, COMPRESS_STATE, true);
 	if (v)
 		write_log (_T("Save of '%s' complete\n"), filename);
 	zfile_fclose (f);

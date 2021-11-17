@@ -300,7 +300,8 @@ static int trap_thread (void *arg)
 	/* Good bye, cruel world... */
 
 	/* dummy return value */
-	return 0;
+	//return NULL + 0;
+	return NULL;
 }
 
 
@@ -551,7 +552,7 @@ static void hardware_trap_ack(TrapContext *ctx)
 
 static int hardware_trap_thread(void *arg)
 {
-#ifdef CPU_AARCH64
+#if defined CPU_AARCH64 || defined CPU_AMD64
 	int tid = *(uae_u32*)arg;
 #else
 	int tid = (uae_u32)arg;
@@ -613,7 +614,8 @@ static int hardware_trap_thread(void *arg)
 		}
 	}
 	hardware_trap_kill[tid] = -1;
-	return 0;
+	//return 0;
+	return NULL;
 }
 
 void trap_background_set_complete(TrapContext *ctx)
@@ -806,7 +808,7 @@ void init_traps(void)
 		for (int i = 0; i < TRAP_THREADS; i++) {
 			init_comm_pipe(&trap_thread_pipe[i], 100, 1);
 			hardware_trap_kill[i] = 1;
-			uae_start_thread_fast(hardware_trap_thread, (void *)i, &trap_thread_id[i]);
+			uae_start_thread_fast(hardware_trap_thread, (void *)NULL + i, &trap_thread_id[i]);
 		}
 	}
 }

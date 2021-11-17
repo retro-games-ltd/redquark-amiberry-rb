@@ -18,7 +18,9 @@
 #define FILESYS /* filesys emulation */
 #define UAE_FILESYS_THREADS
 #define AUTOCONFIG /* autoconfig support, fast ram, harddrives etc.. */
+#ifndef CPU_AMD64
 #define JIT /* JIT compiler support */
+#endif
 #if defined(ARMV6T2) || defined(CPU_AARCH64)
 #define USE_JIT_FPU
 #endif
@@ -115,7 +117,7 @@
 
 #include <stdint.h>
 
-#ifdef CPU_AARCH64
+#if defined CPU_AARCH64  || defined CPU_AMD64
 #define SIZEOF_VOID_P 8
 #else
 #define SIZEOF_VOID_P 4
@@ -539,7 +541,7 @@ typedef int32_t uae_atomic;
 
 #define M68K_SPEED_7MHZ_CYCLES 0
 #define M68K_SPEED_14MHZ_CYCLES 1024
-#define M68K_SPEED_25MHZ_CYCLES 128
+#define M68K_SPEED_25MHZ_CYCLES 2048
 
 typedef unsigned int WPARAM;
 typedef int LPARAM;

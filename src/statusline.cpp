@@ -289,6 +289,7 @@ void draw_status_line_single(uae_u8 *buf, int bpp, int y, int totalwidth, uae_u3
 		}
 		else if (led == LED_SND && gui_data.sndbuf_avail)
 		{
+			on_rgb = off_rgb = 0x000000;
 			int snd = abs(gui_data.sndbuf + 5) / 10;
 			if (snd > 99)
 				snd = 99;
@@ -296,18 +297,23 @@ void draw_status_line_single(uae_u8 *buf, int bpp, int y, int totalwidth, uae_u3
 			on = gui_data.sndbuf_status;
 			if (on < 3)
 			{
+#if defined REDQUARK
+			    off_rgb = bpp == 2 ? 0x004400 : 0x004400;
+				num1 = snd / 10;
+				num2 = snd % 10;
+				num3 = 13; // pct
+#else
 				num1 = gui_data.sndbuf < 0 ? 15 : 14;
 				num2 = snd / 10;
 				num3 = snd % 10;
+#endif
 			}
-			on_rgb = 0x000000;
 			if (on < 0)
 				on_rgb = 0xcccc00; // underflow
 			else if (on == 2)
 				on_rgb = bpp == 2 ? 0xcc0000 : 0x0000cc; // really big overflow
 			else if (on == 1)
 				on_rgb = bpp == 2 ? 0x0000cc : 0xcc0000; // "normal" overflow
-			off_rgb = 0x000000;
 			am = 3;
 		}
 		else if (led == LED_MD)
@@ -330,7 +336,19 @@ void draw_status_line_single(uae_u8 *buf, int bpp, int y, int totalwidth, uae_u3
 		}
 		else if (led == LED_NET)
 		{
-			pos = 6;
+            pos = 6;
+#ifdef REDQUARK
+            // Steal the NET LED for temperature
+			int temp = gui_data.temperature;
+            on = 1;
+			off_rgb = 0x000000;
+            int range = 0xf0 / (100 - 20);
+            int v = range * abs(temp - 20);
+            on_rgb = bpp == 2 ? v : v<<16;
+			num1 = -1;
+			num2 = temp / 10;
+			num3 = temp % 10;
+#else
 			if (gui_data.net >= 0)
 			{
 				on = gui_data.net;
@@ -345,6 +363,7 @@ void draw_status_line_single(uae_u8 *buf, int bpp, int y, int totalwidth, uae_u3
 				num3 = 17;
 				am = 1;
 			}
+#endif
 		}
 		else
 		{

@@ -18,6 +18,10 @@
 #ifndef ANDROID
 #include <execinfo.h>
 #endif
+#if defined REDQUARK
+#include <sys/sendfile.h>
+#include <unistd.h>
+#endif
 
 #include "sysdeps.h"
 #include "options.h"
@@ -65,6 +69,15 @@ bool host_poweroff = false;
 
 struct amiberry_options amiberry_options = {};
 
+#if defined REDQUARK
+extern int emulib_exit_request;
+extern int savestate_then_quit;
+extern struct uae_prefs currprefs;
+
+static const TCHAR* scalemode[] = { _T("none"), _T("dynamic"), _T("fixed"), _T("fit"), _T("dynamicfit"), 
+                                    _T("none_crt"), _T("dynamic_crt"), _T("fixed_crt"), _T("fit_crt"), _T("dynamicfit_crt"), 0 };
+#endif
+
 // Default Enter GUI key is F12
 int enter_gui_key = 0;
 // We don't set a default value for Quitting
@@ -93,6 +106,10 @@ void set_key_configs(struct uae_prefs* p)
 	// if nothing was found in amiberry.conf either, we default back to F12
 	if (enter_gui_key == 0)
 		enter_gui_key = SDLK_F12;
+#if defined REDQUARK
+    if( p->ignore_gui )
+		enter_gui_key = 0;
+#endif
 
 	if (strncmp(p->quit_amiberry, "", 1) != 0)
 		quit_key = SDL_GetKeyFromName(p->quit_amiberry);
@@ -133,6 +150,7 @@ static char rom_path[MAX_DPATH];
 static char rp9_path[MAX_DPATH];
 static char controllers_path[MAX_DPATH];
 static char retroarch_file[MAX_DPATH];
+static char whdboot_path[MAX_DPATH];
 static char logfile_path[MAX_DPATH];
 static char floppy_sounds_dir[MAX_DPATH];
 
@@ -236,7 +254,11 @@ void logging_init(void)
 			debugfile = nullptr;
 		}
 
+#ifdef REDQUARK
+		sprintf(debug_filename, "%s/log/amiberry_log.txt", start_path_data);
+#else
 		sprintf(debug_filename, "%s", logfile_path);
+#endif
 		if (!debugfile)
 			debugfile = fopen(debug_filename, "wt");
 
@@ -316,10 +338,28 @@ void target_run(void)
 {
 	// Reset counter for access violations
 	init_max_signals();
+#if defined REDQUARK
+    gui_led_open_gpio();
+#endif
 }
 
 void target_quit(void)
 {
+#if defined REDQUARK
+    if (emulating && currprefs.save_state_on_exit ) {
+        // Set flag for amiberry_gfx.cpp:render_screen() so that it will save a snapshot
+        // and then quit the emu.
+        // It causes render_screen to fade the volume to zero and clear the output audio
+        // buffer, to avoid machine-gun stutter as the audio buffer fill stalls during file
+        // write. savestate_state is then set to STATE_DOSAVE and after a few frames delay,
+        // the snapshot is taken. The emulator then quits.
+        savestate_then_quit = quit_program;
+
+        // Clear quit flag. render_screen() will set it to savestate_then_quit when the
+        // save state is done.
+        quit_program = 0;
+    }
+#endif
 }
 
 void fix_apmodes(struct uae_prefs* p)
@@ -508,6 +548,18 @@ void target_default_options(struct uae_prefs* p, int type)
 	p->floatingJoystick = 0;
 	p->disableMenuVKeyb = 0;
 #endif
+
+#if defined REDQUARK
+	if( type == 0 ) p->save_state_on_exit = 0;
+    p->gfx_dynamic_scale = 0;
+    p->gfx_dynamic_top   = 0;
+    p->gfx_dynamic_height = 0;
+    p->gfx_dynamic_safe_zone = 30; // 30 px safe zone top and bottom of display (in "fit" mode)
+    memset( p->ignore_keycodes, 0, sizeof(p->ignore_keycodes) / sizeof(p->ignore_keycodes[0]) );
+    p->ignore_gui = 0;
+#endif
+
+    if( type == 0 ) p->whdload_file[0] = 0;
 }
 
 void target_save_options(struct zfile* f, struct uae_prefs* p)
@@ -571,6 +623,34 @@ void target_save_options(struct zfile* f, struct uae_prefs* p)
 	cfgfile_write(f, "amiberry.pos_y_button6", "%d", p->pos_y_button6);
 	cfgfile_write(f, "amiberry.floating_joystick", "%d", p->floatingJoystick);
 	cfgfile_write(f, "amiberry.disable_menu_vkeyb", "%d", p->disableMenuVKeyb);
+#endif
+
+#if defined REDQUARK
+    cfgfile_write_str(f, _T("amiberry.disk_led_gpio"), p->disk_led_gpio );
+    cfgfile_write_str(f, _T("amiberry.power_led_gpio"), p->power_led_gpio );
+	cfgfile_write_bool(f, _T("amiberry.save_state_on_exit"), p->save_state_on_exit);
+	cfgfile_write_bool(f, _T("amiberry.ignore_gui"), p->ignore_gui);
+    cfgfile_write_bool(f, _T("amiberry.force_jit"), p->force_jit );
+
+	TCHAR tmp[MAX_DPATH];
+    auto l = 0;
+    for( auto i = 0; i < MAX_INPUT_DEVICE_EVENTS; i++ ) {
+        if( p->ignore_keycodes[i] ) {
+            if( l ) tmp[l++] = ',';
+            l += sprintf( tmp + l, "%d", i );
+        }
+    }
+    if( l ) cfgfile_write_str(f, _T("amiberry.ignore_keycodes"), tmp );
+
+    if ( savestate_then_quit != 0 ) {
+        // Emit restore details (such as WHD autoload file, and the statefile).
+        cfgfile_write_str(f, _T("amiberry.autoload"), p->whdload_file );
+        cfgfile_write_str(f, _T("statefile"), RESTORE_STATE_FILE );
+    }
+    cfgfile_write_str(f, _T("amiberry.gfx_scale"),  scalemode[p->gfx_dynamic_scale]);
+	cfgfile_write(f, _T("amiberry.gfx_dynamic_top"), _T("%d"), p->gfx_dynamic_top );
+	cfgfile_write(f, _T("amiberry.gfx_dynamic_height"), _T("%d"), p->gfx_dynamic_height );
+	cfgfile_write(f, _T("amiberry.gfx_dynamic_safe_zone"), _T("%d"), p->gfx_dynamic_safe_zone );
 #endif
 }
 
@@ -652,6 +732,71 @@ int target_parse_option(struct uae_prefs* p, const char* option, const char* val
 		return 1;
 	if (cfgfile_string(option, value, "fullscreen_toggle", p->fullscreen_toggle, sizeof p->fullscreen_toggle))
 		return 1;
+
+#if defined REDQUARK
+	if (cfgfile_string(option, value, "disk_led_gpio", p->disk_led_gpio, sizeof p->disk_led_gpio))
+		return 1;
+	if (cfgfile_string(option, value, "power_led_gpio", p->power_led_gpio, sizeof p->power_led_gpio))
+		return 1;
+	if (cfgfile_yesno(option, value, _T("save_state_on_exit"), &p->save_state_on_exit))
+		return 1;
+    if( cfgfile_strval(option, value, _T("gfx_scale"), &p->gfx_dynamic_scale, scalemode, 0) )
+        return 1;
+	if (cfgfile_intval(option, value, _T("gfx_dynamic_top"), &p->gfx_dynamic_top, 1))
+		return 1;
+	if (cfgfile_intval(option, value, _T("gfx_dynamic_height"), &p->gfx_dynamic_height, 1))
+		return 1;
+	if (cfgfile_intval(option, value, _T("gfx_dynamic_safe_zone"), &p->gfx_dynamic_safe_zone, 1))
+		return 1;
+
+    if (_tcscmp(option, _T("bind_joysticks")) == 0 ) {
+		TCHAR tmp[MAX_DPATH];
+        cfgfile_string(option, value, _T("bind_joysticks"), tmp, sizeof tmp / sizeof(TCHAR));
+
+        if( !value[0] ) return 1;
+        // Chop up string on comma, and push each string chunk into p->bind_joysticks[..]
+        int i = 0;
+        TCHAR *ptr = strdup(tmp); // Hmm.. this leaks memory every time config is read
+        TCHAR *s = ptr;
+        do {
+            s = ptr;
+            while( *ptr != '\0' && *ptr != ',' ) ptr++;
+            if( ptr > s ) {
+               *ptr = '\0'; 
+                p->bind_joysticks[i++] = s;
+            }
+        } while( s < ptr++ && i < MAX_JPORTS_TOTAL ); // ptr inc _after_ comparison
+        p->bind_joysticks[i] = NULL; // Terminate 
+        
+        return 1;
+    }
+    if (_tcscmp(option, _T("ignore_keycodes")) == 0 ) {
+        // Comma separated list of keycodes to ignore
+		TCHAR tmp[MAX_DPATH];
+        cfgfile_string(option, value, _T("ignore_keycodes"), tmp, sizeof tmp / sizeof(TCHAR));
+
+        TCHAR *ptr = &tmp[0];
+        TCHAR *s = ptr;
+        do {
+            s = ptr;
+            while( *ptr != '\0' && *ptr != ',' ) ptr++;
+            if( ptr > s ) {
+               *ptr = '\0'; 
+               int sc = atoi(s);
+               if( sc >  0 && sc < MAX_INPUT_DEVICE_EVENTS ) {
+                 p->ignore_keycodes[sc] = 1;
+               }
+            }
+        } while( s < ptr++ ); // ptr inc _after_ comparison
+        
+        return 1;
+    }
+	if (cfgfile_yesno(option, value, _T("ignore_gui"), &p->ignore_gui))
+		return 1;
+	if (cfgfile_yesno(option, value, _T("force_jit"), &p->force_jit))
+		return 1;
+#endif
+
 	if (cfgfile_intval(option, value, _T("cpu_idle"), &p->cpu_idle, 1))
 		return 1;
 	if (cfgfile_intval(option, value, _T("active_priority"), &p->active_capture_priority, 1))
@@ -752,6 +897,17 @@ void get_rom_path(char* out, int size)
 void set_rom_path(char* newpath)
 {
 	strncpy(rom_path, newpath, MAX_DPATH - 1);
+}
+
+void fetch_whdbootpath(char* out, int size)
+{
+	fix_trailing(whdboot_path);
+	strncpy(out, whdboot_path, size - 1);
+}
+
+void set_whdbootpath(char* newpath)
+{
+	strncpy(whdboot_path, newpath, MAX_DPATH - 1);
 }
 
 void get_rp9_path(char* out, int size)
@@ -1163,29 +1319,53 @@ static void trim_wsa(char* s)
 		s[--len] = '\0';
 }
 
+static int get_env_dir( char * path, const char *path_template, const char *envname )
+{
+    int ret = 0;
+    char *ep = getenv(envname);
+    if( ep != NULL ) {
+        snprintf(path, MAX_DPATH, path_template, ep );
+        DIR* tdir = opendir(path);
+        if (tdir) {
+            closedir(tdir);
+            ret = 1;
+        }
+    }
+    return ret;
+}
+
 void load_amiberry_settings(void)
 {
 	char path[MAX_DPATH];
 	int i;
+    int rom_on_removable_media = 0;
 	strncpy(current_dir, start_path_data, MAX_DPATH - 1);
 	snprintf(config_path, MAX_DPATH, "%s/conf/", start_path_data);
 	snprintf(controllers_path, MAX_DPATH, "%s/controllers/", start_path_data);
 	snprintf(retroarch_file, MAX_DPATH, "%s/conf/retroarch.cfg", start_path_data);
 	snprintf(logfile_path, MAX_DPATH, "%s/amiberry.log", start_path_data);
 
-#ifdef ANDROID
+#if defined ANDROID || defined REDQUARK
 	char afepath[MAX_DPATH];
-	snprintf(afepath, MAX_DPATH, "%s/Android/data/com.cloanto.amigaforever.essentials/files/rom/", getenv("SDCARD"));
-	DIR* afedir = opendir(afepath);
-	if (afedir) {
-		snprintf(rom_path, MAX_DPATH, "%s", afepath);
-		closedir(afedir);
-	}
-	else
+    const char *ptemp;
+#  if defined REDQUARK
+    ptemp = "%s/roms/";
+#  else
+    ptemp = "%s/Android/data/com.cloanto.amigaforever.essentials/files/rom/";
+#  endif
+    if( get_env_dir( rom_path, ptemp, "SDCARD" ) )
+        rom_on_removable_media = 1;
+    else
 		snprintf(rom_path, MAX_DPATH, "%s/kickstarts/", start_path_data);
 #else
 	snprintf(rom_path, MAX_DPATH, "%s/kickstarts/", start_path_data);
 #endif
+
+#if defined REDQUARK
+    if( ! get_env_dir( whdboot_path, "%s/whdboot/", "SDCARD" ) )
+#endif
+	snprintf(whdboot_path, MAX_DPATH, "%s/whdboot/", start_path_data);
+
 	snprintf(rp9_path, MAX_DPATH, "%s/rp9/", start_path_data);
 	snprintf(path, MAX_DPATH, "%s/conf/amiberry.conf", start_path_data);
 	snprintf(floppy_sounds_dir, MAX_DPATH, "%s/data/floppy_sounds/", start_path_data);
@@ -1259,6 +1439,9 @@ void load_amiberry_settings(void)
 					cfgfile_string(option, value, "controllers_path", controllers_path, sizeof controllers_path);
 					cfgfile_string(option, value, "retroarch_config", retroarch_file, sizeof retroarch_file);
 					cfgfile_string(option, value, "logfile_path", logfile_path, sizeof logfile_path);
+#if defined REDQUARK
+                    if (!rom_on_removable_media) // If using removable media for ROM, don't pull rom_path from config
+#endif
 					cfgfile_string(option, value, "rom_path", rom_path, sizeof rom_path);
 					cfgfile_intval(option, value, "ROMs", &numROMs, 1);
 					cfgfile_intval(option, value, "MRUDiskList", &numDisks, 1);
@@ -1364,6 +1547,9 @@ uae_u32 emulib_target_getcpurate(uae_u32 v, uae_u32* low)
 
 void target_shutdown(void)
 {
+#ifdef REDQUARK
+    exit(0x5d);
+#endif
 	system("sudo poweroff");
 }
 
@@ -1376,15 +1562,22 @@ int main(int argc, char* argv[])
 {
 	struct sigaction action{};
 
+#if defined REDQUARK
+	max_uae_width = 1280;
+	max_uae_height = 720;
+#else
 	max_uae_width = 1920;
 	max_uae_height = 1080;
+#endif
 
 	// Get startup path
-#ifdef ANDROID
-    strncpy(start_path_data, getenv("EXTERNAL_FILES_DIR"), MAX_DPATH - 1);
-#else
-	getcwd(start_path_data, MAX_DPATH);
+#if (defined ANDROID) || (defined REDQUARK)
+    char *ep = getenv("EXTERNAL_FILES_DIR"); // XXX See also amiberry_filesys.cpp
+    if( ep != NULL ) strncpy(start_path_data, ep, MAX_DPATH - 1);
+    else
 #endif
+	getcwd(start_path_data, MAX_DPATH);
+
 	rename_old_adfdir();
 	load_amiberry_settings();
 	rp9_init();
@@ -1463,11 +1656,18 @@ int main(int argc, char* argv[])
 
 	if (host_poweroff)
 		target_shutdown();
+#if defined REDQUARK
+    if( emulib_exit_request ) return 23;
+#endif
+
 	return 0;
 }
 
 void setpriority(int prio)
 {
+#if defined REDQUARK
+	prio = 2; // Always the highest priority
+#endif
 	if (prio >= 0 && prio <= 2)
 	{
 		switch (prio)
@@ -1506,7 +1706,10 @@ void toggle_mousegrab()
 
 void set_mouse_grab(const bool grab)
 {
-#ifdef USE_DISPMANX
+#ifdef REDQUARK
+    return;
+#endif
+#ifdef USE_DISPMANX 
 	if (currprefs.allow_host_run)
 	{
 		if (grab)
@@ -1794,6 +1997,21 @@ void process_event(SDL_Event event)
 					inputdevice_add_inputcode(AKS_TOGGLEWINDOWEDFULLSCREEN, 1, nullptr);
 					break;
 				}
+
+#ifdef REDQUARK
+                // Alternative, in addition to QUIT - Redquark power button (brief press)
+				if (event.key.keysym.scancode == SDL_SCANCODE_MENU ) // SDL Does not have CONTEXT_MENU, so use MENU (evdev KEY_MENU)
+                {
+					inputdevice_add_inputcode(AKS_QUIT, 1, nullptr);
+					break;
+                }
+                // Handle power key
+				if (event.key.keysym.scancode == SDL_SCANCODE_POWER )
+				{
+					inputdevice_add_inputcode(AKS_SHUTDOWN, 1, nullptr);
+					break;
+				}
+#endif
 			}
 			// If the reset combination was pressed, handle it
 			if (amiberry_options.swap_win_alt_keys)
@@ -2066,3 +2284,38 @@ bool get_plugin_path(TCHAR* out, int len, const TCHAR* path)
 	}
 	return TRUE;
 }
+
+#if defined REDQUARK
+// If replace is false, copyfile will fail if file already exists
+int copyfile( const char *target, const char *source, int replace )
+{
+    int tfd = -1;
+    int sfd = -1;
+    int ret = -1;
+    struct stat sb;
+
+    int rflag = replace ? 0 : O_EXCL;
+
+    for(;;) {
+        if( (tfd = open( target, O_WRONLY | O_CREAT | O_TRUNC | rflag, 0644 )) < 0 )
+            break;
+
+        if( (sfd = open( source, O_RDONLY )) < 0 ) 
+            break;
+
+        if( fstat( sfd, &sb ) < 0 ) 
+            break;
+
+        // Could use mmap and write to transfer file for better portability
+        off_t transferred = 0;
+        ret = sendfile( tfd, sfd, &transferred, sb.st_size );
+
+        break;
+    }
+
+    if( sfd >= 0 ) close( sfd );
+    if( tfd >= 0 ) close( tfd );
+
+    return ret;
+}
+#endif

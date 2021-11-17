@@ -36,6 +36,12 @@ static gcn::RadioButton* optFastest;
 static gcn::Label* lblCpuIdle;
 static gcn::Slider* sldCpuIdle;
 
+#if defined REDQUARK
+# define FORCE_JIT(b) changed_prefs.force_jit = b;
+#else
+# define FORCE_JIT(b) {}
+#endif
+
 class CPUButtonActionListener : public gcn::ActionListener
 {
 public:
@@ -50,6 +56,7 @@ public:
 			changed_prefs.rtgboards[0].rtgmem_size = 0;
 			changed_prefs.cachesize = 0;
 			changed_prefs.compfpu = false;
+			FORCE_JIT( false );
 		}
 		else if (actionEvent.getSource() == optCPU68010)
 		{
@@ -60,6 +67,7 @@ public:
 			changed_prefs.rtgboards[0].rtgmem_size = 0;
 			changed_prefs.cachesize = 0;
 			changed_prefs.compfpu = false;
+			FORCE_JIT( false );
 		}
 		else if (actionEvent.getSource() == optCPU68020)
 		{
@@ -157,6 +165,7 @@ public:
 		{
 			changed_prefs.cpu_compatible = true;
 			changed_prefs.cachesize = 0;
+			FORCE_JIT( false );
 		}
 		else
 		{
@@ -184,11 +193,13 @@ public:
 				changed_prefs.cpu_cycle_exact = false;
 				changed_prefs.cpu_memory_cycle_exact = false;
 				changed_prefs.address_space_24 = false;
+			    FORCE_JIT( true );
 			}
 			else
 			{
 				changed_prefs.cachesize = 0;
 				changed_prefs.compfpu = false;
+			    FORCE_JIT( false );
 			}
 		}
 		else if (actionEvent.getSource() == chkFPUJIT)

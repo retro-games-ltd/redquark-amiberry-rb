@@ -4,10 +4,25 @@
 #include "sysdeps.h"
 #include "fsdb.h"
 
+#if defined REDQUARK
+#include <stdlib.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include "include/crc32.h"
+#endif
+
 string prefix_with_application_directory_path(string currentpath)
 {
-#ifdef ANDROID
-	return getenv("EXTERNAL_FILES_DIR") + ("/" + currentpath);
+#if (defined ANDROID) || (defined REDQUARK)
+    char *efd = getenv("EXTERNAL_FILES_DIR");
+    if( efd != NULL ) {
+        return efd + ("/" + currentpath);
+    } else {
+	    return currentpath;
+    }
 #else
 	return currentpath;
 #endif
@@ -132,6 +147,17 @@ unsigned int my_write(struct my_openfile_s* mos, void* b, unsigned int size)
 	return static_cast<unsigned int>(bytes_written);
 }
 
+int my_existslink(const char* name)
+{
+	struct stat st{};
+	if (lstat(name, &st) == -1)
+	{
+		return 0;
+	}
+	if (S_ISLNK(st.st_mode))
+		return 1;
+	return 0;
+}
 
 int my_existsfile(const char* name)
 {
@@ -226,4 +252,37 @@ int target_get_volume_name(struct uaedev_mount_info* mtinf, struct uaedev_config
 {
 	sprintf(ci->volname, "DH_%c", ci->rootdir[0]);
 	return 2;
+}
+
+const TCHAR * my_get_sha1_of_file( const char *filepath )
+{
+#if defined REDQUARK
+    void *   mem;
+    struct  stat sb;
+    int     fd = -1;
+    int     ret = 0;
+    int len;
+
+    if( (fd = open( (char*)filepath, O_RDONLY ) ) < 0 ) ret = (-3);
+    if( ret == 0 && fstat( fd, &sb ) < 0 ) ret = (-2);
+
+    if( ret == 0 ) {
+        if( (mem = mmap( (caddr_t)0, (int)sb.st_size,
+                        PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0 )) != MAP_FAILED ) {
+            len = (int)sb.st_size;
+        } else ret = (-1);
+    }
+
+    if( ret > (-3) ) close( fd );
+
+    if( ret < 0 ) return NULL;
+
+    const TCHAR *sha1 = get_sha1_txt( mem, len );
+
+    munmap( (caddr_t)mem, (size_t)len );
+
+    return sha1; 
+#else
+    return NULL; // TODO Other platforms
+#endif
 }

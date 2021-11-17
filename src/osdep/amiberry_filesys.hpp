@@ -50,3 +50,4 @@ const TCHAR* my_getfilepart(const TCHAR* filename);
 int target_get_volume_name(struct uaedev_mount_info* mtinf, struct uaedev_config_info* ci, bool inserted,
                            bool fullcheck, int cnt);
 
+const TCHAR * my_get_sha1_of_file( const char *filepath );

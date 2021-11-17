@@ -140,6 +140,10 @@ static const TCHAR* soundmode1[] = {_T("none"), _T("interrupts"), _T("normal"), 
 static const TCHAR* soundmode2[] = {_T("none"), _T("interrupts"), _T("good"), _T("best"), nullptr};
 static const TCHAR* centermode1[] = { _T("none"), _T("simple"), _T("smart"), 0 };
 static const TCHAR* centermode2[] = { _T("false"), _T("true"), _T("smart"), 0 };
+#if defined REDQUARK
+// Must match SDL_GameControllerButton order. Backm Guide, LStick and RStick are not used in Manhattan
+static const TCHAR* hotbuttons[] = { _T(""), _T("south"), _T("east"), _T("west"), _T("north"), _T("back"), _T("guide"), _T("start"), _T("left_stick"), _T("right_stick"), _T("left_shoulder"), _T("right_shoulder"), _T("dpad_up"), _T("dpad_down"), _T("dpad_left"), _T("dpad_right"), 0 };
+#endif
 static const TCHAR* stereomode[] = { _T("mono"), _T("stereo"), _T("clonedstereo"), _T("4ch"), _T("clonedstereo6ch"), _T("6ch"), _T("mixed"), nullptr};
 static const TCHAR* interpolmode[] = {_T("none"), _T("anti"), _T("sinc"), _T("rh"), _T("crux"), nullptr};
 static const TCHAR* collmode[] = {_T("none"), _T("sprites"), _T("playfields"), _T("full"), nullptr};
@@ -1889,7 +1893,7 @@ void cfgfile_save_options(struct zfile* f, struct uae_prefs* p, int type)
 			cfgfile_write_str (f, tmp, p->path_cd.path[i]);
 		}
 	}
-	
+
 #ifdef AMIBERRY
 	cfg_write(_T("; "), f);
 	cfg_write(_T("; *** Controller/Input Configuration"), f);
@@ -1959,6 +1963,13 @@ void cfgfile_save_options(struct zfile* f, struct uae_prefs* p, int type)
 				_stprintf(tmp1, _T("joyport%d_keyboardoverride"), i);
 				cfgfile_write_bool(f, tmp1, !jp->nokeyboardoverride);
 			}
+#if defined REDQUARK
+            if (jp->hotbutton)
+            {
+				_stprintf(tmp1, _T("joyport%d_hotbutton"), i);
+				cfgfile_dwrite_str(f, tmp1, hotbuttons[jp->hotbutton]);
+            }
+#endif
 		}
 
 		// custom options SAVING
@@ -2203,10 +2214,13 @@ void cfgfile_save_options(struct zfile* f, struct uae_prefs* p, int type)
 	if (p->trainerfile[0])
 		cfgfile_write_str(f, _T("trainerfile"), p->trainerfile);
 
+#ifndef REDQUARK
+    // Redquark handles this to ensure it is initially set
 	if (p->statefile[0])
 		cfgfile_write_str(f, _T("statefile"), p->statefile);
 	if (p->quitstatefile[0])
 		cfgfile_write_str(f, _T("statefile_quit"), p->quitstatefile);
+#endif
 	
 	cfgfile_write(f, _T("nr_floppies"), _T("%d"), p->nr_floppies);
 	cfgfile_dwrite_bool(f, _T("floppy_write_protect"), p->floppy_read_only);
@@ -2275,6 +2289,9 @@ void cfgfile_save_options(struct zfile* f, struct uae_prefs* p, int type)
 	cfgfile_write_str(f, _T("gfx_fullscreen_picasso"), fullmodes[p->gfx_apmode[1].gfx_fullscreen]);
 	cfgfile_write_str(f, _T("gfx_center_horizontal"), centermode1[p->gfx_xcenter]);
 	cfgfile_write_str(f, _T("gfx_center_vertical"), centermode1[p->gfx_ycenter]);
+
+	cfgfile_write_bool(f, _T("ntsc"), p->ntscmode);
+
 	cfgfile_write_str(f, _T("gfx_colour_mode"), colormode1[p->color_mode]);
 	cfgfile_write_bool(f, _T("gfx_blacker_than_black"), p->gfx_blackerthanblack);
 	cfgfile_dwrite_str(f, _T("gfx_atari_palette_fix"), threebitcolors[p->gfx_threebitcolors]);
@@ -2631,6 +2648,9 @@ void cfgfile_save_options(struct zfile* f, struct uae_prefs* p, int type)
 	cfgfile_write_bool(f, _T("sound_stereo_swap_paula"), p->sound_stereo_swap_paula);
 	cfgfile_write_bool(f, _T("sound_stereo_swap_ahi"), p->sound_stereo_swap_ahi);
 	cfgfile_dwrite_bool(f, _T("sound_volcnt"), p->sound_volcnt);
+#if defined REDQUARK
+	cfgfile_dwrite_bool(f, _T("sound_pullmode"), p->sound_pullmode);
+#endif
 	cfgfile_dwrite(f, _T("sampler_frequency"), _T("%d"), p->sampler_freq);
 	cfgfile_dwrite(f, _T("sampler_buffer"), _T("%d"), p->sampler_buffer);
 	cfgfile_dwrite_bool(f, _T("sampler_stereo"), p->sampler_stereo);
@@ -2685,6 +2705,9 @@ void cfgfile_save_options(struct zfile* f, struct uae_prefs* p, int type)
 	cfgfile_write(f, _T("whdload_custom4"), _T("%d"), p->whdbootprefs.custom4);
 	cfgfile_write(f, _T("whdload_custom5"), _T("%d"), p->whdbootprefs.custom5);
 	cfgfile_write_str(f, _T("whdload_custom"), p->whdbootprefs.custom);
+#if defined REDQUARK
+	cfgfile_write_bool(f, _T("whdload_writecache"), p->whdbootprefs.writecache);
+#endif
 #endif
 }
 
@@ -3244,6 +3267,9 @@ static int cfgfile_parse_host(struct uae_prefs* p, TCHAR* option, TCHAR* value)
 		|| cfgfile_intval(option, value, _T("whdload_custom5"), &p->whdbootprefs.custom5, 1)
 		|| cfgfile_yesno(option, value, _T("whdload_buttonwait"), &p->whdbootprefs.buttonwait)
 		|| cfgfile_yesno(option, value, _T("whdload_showsplash"), &p->whdbootprefs.showsplash)
+#if defined REDQUARK
+		|| cfgfile_yesno(option, value, _T("whdload_writecache"), &p->whdbootprefs.writecache)
+#endif
 		)
 	{
 		return 1;
@@ -3472,6 +3498,9 @@ static int cfgfile_parse_host(struct uae_prefs* p, TCHAR* option, TCHAR* value)
 		|| cfgfile_yesno(option, value, _T("sound_auto"), &p->sound_auto)
 		|| cfgfile_yesno(option, value, _T("sound_cdaudio"), &p->sound_cdaudio)
 		|| cfgfile_yesno(option, value, _T("sound_volcnt"), &p->sound_volcnt)
+#if defined REDQUARK
+		|| cfgfile_yesno(option, value, _T("sound_pullmode"), &p->sound_pullmode)
+#endif
 		|| cfgfile_yesno(option, value, _T("sound_stereo_swap_paula"), &p->sound_stereo_swap_paula)
 		|| cfgfile_yesno(option, value, _T("sound_stereo_swap_ahi"), &p->sound_stereo_swap_ahi)
 		|| cfgfile_yesno(option, value, _T("debug_mem"), &p->debug_mem)
@@ -3706,6 +3735,7 @@ static int cfgfile_parse_host(struct uae_prefs* p, TCHAR* option, TCHAR* value)
 		return 1;
 	}
 
+	// olde versions (compatibility)
 	if (_tcscmp(option, _T("show_leds_size")) == 0 || _tcscmp(option, _T("show_leds_size_rtg")) == 0) {
 		TCHAR tmp[MAX_DPATH];
 		int idx = _tcscmp(option, _T("show_leds_size")) == 0 ? 0 : 1;
@@ -3896,6 +3926,10 @@ static int cfgfile_parse_host(struct uae_prefs* p, TCHAR* option, TCHAR* value)
 		p->jports[3].nokeyboardoverride = !vb;
 		return 1;
 	}
+#ifdef REDQUARK
+	if (cfgfile_strval(option, value, _T("joyport0_hotbutton"), &p->jports[0].hotbutton, hotbuttons, 0) ) return 1;
+	if (cfgfile_strval(option, value, _T("joyport1_hotbutton"), &p->jports[1].hotbutton, hotbuttons, 0) ) return 1;
+#endif
 
 	if (cfgfile_path(option, value, _T("statefile"), tmpbuf, sizeof tmpbuf / sizeof(TCHAR))) {
 		_tcscpy(p->statefile, tmpbuf);
@@ -5941,6 +5975,12 @@ static int cfgfile_parse_hardware(struct uae_prefs* p, const TCHAR* option, TCHA
 	}
 	if (cfgfile_intval(option, value, _T("finegrain_cpu_speed"), &p->m68k_speed, 1))
 	{
+#if defined REDQUARK
+        // Fix old/incorrect 25MHz speed value.
+        // newcpu:save_cpu_extra(..) divides this value by 512 when storing, loosing the value
+        // so on restore the CPU thinks it's running at 7MHz!
+        if( p->m68k_speed == 128 ) p->m68k_speed = M68K_SPEED_25MHZ_CYCLES;
+#endif
 		if (OFFICIAL_CYCLE_UNIT > CYCLE_UNIT)
 		{
 			int factor = OFFICIAL_CYCLE_UNIT / CYCLE_UNIT;
@@ -7119,6 +7159,7 @@ void cfgfile_addcfgparam(TCHAR* line)
 	}
 	if (!cfgfile_separate_line(line, line1b, line2b))
 		return;
+
 	if (!_tcsnicmp(line1b, _T("input."), 6)) {
 		line1b[5] = '_';
 	}
@@ -7713,6 +7754,10 @@ void default_prefs(struct uae_prefs* p, bool reset, int type)
 	p->sampler_freq = 0;
 #ifdef AMIBERRY
 	p->sound_volume_cd = 20;
+#if defined REDQUARK
+    p->sound_pullmode = false;
+    p->whdbootprefs.writecache = false;
+#endif
 #endif
 	p->comptrustbyte = 0;
 	p->comptrustword = 0;
@@ -8221,6 +8266,7 @@ static int bip_a3000 (struct uae_prefs *p, int config, int compa, int romcheck)
 	built_in_chipset_prefs (p);
 	p->cs_ciaatod = p->ntscmode ? 2 : 1;
 	return configure_rom (p, roms, romcheck);
+
 }
 static int bip_a4000(struct uae_prefs* p, int config, int compa, int romcheck)
 {
@@ -8480,6 +8526,10 @@ static int bip_a1200(struct uae_prefs* p, int config, int compa, int romcheck)
 		p->fastmem[0].size = 0x400000;
 		p->cs_rtc = 1;
 		break;
+	case 2: // REDQUARK
+		p->fastmem[0].size = 0x800000;
+		p->cs_rtc = 1;
+		break;
 	}
 	set_68020_compa(p, compa, 0);
 
@@ -8510,6 +8560,8 @@ static int bip_a600(struct uae_prefs* p, int config, int compa, int romcheck)
 		p->chipmem_size = 0x200000;
 	if (config == 2)
 		p->fastmem[0].size = 0x400000;
+	if (config == 3) // REDQUARK
+		p->fastmem[0].size = 0x800000;
 	p->chipset_mask = CSMASK_ECS_AGNUS | CSMASK_ECS_DENISE;
 	return configure_rom(p, roms, romcheck);
 }
@@ -8702,7 +8754,6 @@ static int bip_casablanca(struct uae_prefs *p, int config, int compa, int romche
 int built_in_prefs(struct uae_prefs* p, int model, int config, int compa, int romcheck)
 {
 	int v = 0;
-
 	buildin_default_prefs(p);
 	switch (model)
 	{

@@ -2630,6 +2630,7 @@ void init_row_map(void)
 	if (currprefs.cs_color_burst) {
 		row_map_color_burst_buffer = xcalloc(uae_u8, vidinfo->drawbuffer.height_allocated + 2);
 	}
+//printf("Height allocated: %d  Old height: %d  Max height: %d\n", vidinfo->drawbuffer.height_allocated, oldheight, max_uae_height );
 	j = oldheight == 0 ? max_uae_height : oldheight;
 	for (i = vidinfo->drawbuffer.height_allocated; i < max_uae_height + 1 && i < j + 1; i++) {
 		row_map[i] = row_tmp;
@@ -3226,6 +3227,7 @@ static void pfield_draw_line (struct vidbuffer *vb, int lineno, int gfx_ypos, in
 			}
 		}
 
+
 #ifdef AGA
 		if (dip_for_drawing->nr_sprites && ce_is_bordersprite(colors_for_drawing.extra) && !ce_is_borderblank(colors_for_drawing.extra) && dp_for_drawing->bordersprite_seen)
 			do_color_changes (pfield_do_linetoscr_bordersprite_aga, pfield_do_linetoscr_spr, lineno);
@@ -3329,6 +3331,65 @@ static void pfield_draw_line (struct vidbuffer *vb, int lineno, int gfx_ypos, in
 	}
 }
 
+static int rtop = 0;
+static int rbottom = 0;
+void get_display_center( int *top, int *bottom )
+{
+    *top = rtop;
+    *bottom = rbottom;
+}
+
+void catch_display_center()
+{
+	struct amigadisplay* ad = &adisplays;
+	struct vidbuf_description* vidinfo = &ad->gfxvidinfo;
+    int adj = minfirstline;
+
+    if( (thisframe_first_drawn_line >= 0) && ( thisframe_last_drawn_line != thisframe_first_drawn_line ) ) {
+        rtop    = thisframe_first_drawn_line - minfirstline;
+        rbottom = thisframe_last_drawn_line  - minfirstline;
+    }
+    else
+    {
+        int max_drawn_amiga_line_tmp = max_drawn_amiga_line;
+        if (max_drawn_amiga_line_tmp > vidinfo->drawbuffer.inheight) max_drawn_amiga_line_tmp = vidinfo->drawbuffer.inheight;
+
+        rtop    = minfirstline;
+        rbottom = max_drawn_amiga_line;
+    }
+
+#if 0
+	int w = vidinfo->drawbuffer.inwidth;
+    int vlb = -1;
+    int vlb0 = 0;
+    if ( max_diwstop > 0) { // Horizontal center (simple or smart)
+        if (max_diwstop - min_diwstart < w )
+            /* Try to center. */
+            vlb = (max_diwstop - min_diwstart - w) / 2 + min_diwstart;
+        else // Simple center
+            vlb = max_diwstop - w - (max_diwstop - min_diwstart - w) / 2;
+    }
+    if (vidinfo->drawbuffer.extrawidth) { // Normal no center
+        vlb0 = max_diwlastword - w;
+        if (vidinfo->drawbuffer.extrawidth > 0)
+            vlb0 += vidinfo->drawbuffer.extrawidth << currprefs.gfx_resolution;
+    } else {
+        if (vidinfo->drawbuffer.inxoffset < 0) {
+            vlb0 = 0;
+        } else {
+            vlb0 = vidinfo->drawbuffer.inxoffset - DISPLAY_LEFT_SHIFT;
+        }
+    }
+    if( vlb < 0 ) vlb = vlb0;
+    
+    vlb  &= ~((xshift (1, lores_shift)) - 1);
+    vlb0 &= ~((xshift (1, lores_shift)) - 1);
+    
+    *left  = vlb - vlb0;
+    *right = *left + w;
+#endif
+}
+
 static void center_image (void)
 {
 	auto ad = &adisplays;
@@ -3342,8 +3403,9 @@ static void center_image (void)
 		if (max_diwstop - min_diwstart < w && currprefs.gfx_xcenter == 2)
 			/* Try to center. */
 			visible_left_border = (max_diwstop - min_diwstart - w) / 2 + min_diwstart;
-		else
+		else // Simple center
 			visible_left_border = max_diwstop - w - (max_diwstop - min_diwstart - w) / 2;
+
 		visible_left_border &= ~((xshift (1, lores_shift)) - 1);
 #if 1
 		if (!center_reset && !vertical_changed) {
@@ -3354,7 +3416,7 @@ static void center_image (void)
 			}
 		}
 #endif
-	} else if (vidinfo->drawbuffer.extrawidth) {
+	} else if (vidinfo->drawbuffer.extrawidth) { // Normal no center
 		visible_left_border = max_diwlastword - w;
 		if (vidinfo->drawbuffer.extrawidth > 0)
 			visible_left_border += vidinfo->drawbuffer.extrawidth << currprefs.gfx_resolution;
@@ -3373,6 +3435,7 @@ static void center_image (void)
 	visible_left_border &= ~((xshift (1, lores_shift)) - 1);
 
 	//write_log (_T("%d %d %d %d %d\n"), max_diwlastword, vidinfo->drawbuffer.width, lores_shift, currprefs.gfx_resolution, visible_left_border);
+    //printf ("%d %d %d %d %d\n", max_diwlastword, vidinfo->drawbuffer.inwidth, lores_shift, currprefs.gfx_resolution, visible_left_border);
 
 	linetoscr_x_adjust_pixels = visible_left_border;
 	linetoscr_x_adjust_pixbytes = linetoscr_x_adjust_pixels * vidinfo->drawbuffer.pixbytes;
@@ -3389,7 +3452,8 @@ static void center_image (void)
 	thisframe_y_adjust = minfirstline;
 	if (currprefs.gfx_ycenter && thisframe_first_drawn_line >= 0 && !currprefs.gf[0].gfx_filter_autoscale) {
 
-		if (thisframe_last_drawn_line - thisframe_first_drawn_line < max_drawn_amiga_line_tmp && currprefs.gfx_ycenter == 2)
+		if ( (thisframe_last_drawn_line != thisframe_first_drawn_line) && 
+		     (thisframe_last_drawn_line - thisframe_first_drawn_line < max_drawn_amiga_line_tmp) && currprefs.gfx_ycenter == 2 )
 			thisframe_y_adjust = (thisframe_last_drawn_line - thisframe_first_drawn_line - max_drawn_amiga_line_tmp) / 2 + thisframe_first_drawn_line;
 		else
 			thisframe_y_adjust = thisframe_first_drawn_line;
@@ -3424,6 +3488,18 @@ static void center_image (void)
 
 	vidinfo->drawbuffer.xoffset = (DISPLAY_LEFT_SHIFT << RES_MAX) + (visible_left_border << (RES_MAX - currprefs.gfx_resolution));
 	vidinfo->drawbuffer.yoffset = thisframe_y_adjust << VRES_MAX;
+   
+//printf("LDL: %3d  FDL: %3d  max_ypos: %3d  y-offset: %3d  minfirstline: %3d\n", thisframe_last_drawn_line, thisframe_first_drawn_line, max_ypos_thisframe, vidinfo->drawbuffer.yoffset, minfirstline );
+//
+//int pw, ph, pdx, pdy;
+//get_custom_raw_limits (&pw, &ph, &pdx, &pdy);
+//printf( "pw: %3d ph: %3d pdx: %3d pdy: %3d  Y adjust = %3d   max_drawn_amiga_line_tmp = %3d\n", pw, ph, pdx, pdy, thisframe_y_adjust - minfirstline, max_drawn_amiga_line_tmp); 
+//
+//printf("xoffset %3d  Left border: %3d  Right border: %3d\n", vidinfo->drawbuffer.xoffset,  visible_left_border, visible_right_border );
+//
+//int yt, yb, xl, xr;
+//get_display_center( &yt, &yb, &xl, &xr );
+//printf("yt: %3d  yb: %3d  xl: %3d  xr: %3d\n", yt, yb, xl, xr );
 
 	center_reset = false;
 	horizontal_changed = false;
@@ -3616,6 +3692,7 @@ static void init_drawing_frame (void)
 	}
 
 	center_image ();
+    catch_display_center();
 
 	thisframe_first_drawn_line = -1;
 	thisframe_last_drawn_line = -1;
@@ -4330,14 +4407,14 @@ static int render_thread(void *unused)
 		switch (signal) {
 
 		case RENDER_SIGNAL_PARTIAL:
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX || defined REDQUARK
 			if (!flip_in_progess)
 #endif
 				draw_lines();
 			break;
 
 		case RENDER_SIGNAL_FRAME_DONE:
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX || defined REDQUARK
 			while (flip_in_progess)
 				sleep_micros(1);
 #endif

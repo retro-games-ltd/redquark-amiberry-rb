@@ -24,6 +24,7 @@
 #include "blkdev.h"
 #include "memory.h"
 #include "amiberry_gfx.h"
+#include "amiberry.h"
 
 #ifdef AMIBERRY
 #include <linux/kd.h>
@@ -266,10 +267,50 @@ void SymlinkROMs()
 	symlink_roms(&changed_prefs);
 }
 
+#if defined REDQUARK
+// Copy ROMs from the internal kicstarts directory to the external (SDCard/USBStick) ROMs directory.
+// This ensures there is a directory on the USB stick with valid ROMs and allows the user to override them.
+// 
+static void PopulateExternalRoms()
+{
+	vector<string> files;
+	char master_path[MAX_DPATH];
+	char real_path[MAX_DPATH];
+
+	snprintf(master_path, MAX_DPATH, "%s/kickstarts/", start_path_data);
+	get_rom_path(real_path, MAX_DPATH);
+
+    // If paths are the same, there is nothing to copy!
+    if( strcmp( master_path, real_path ) == 0 )
+        return;
+
+	char master_file[MAX_DPATH];
+	char target_file[MAX_DPATH];
+
+	read_directory(master_path, nullptr, &files);
+	for (auto & file : files)
+	{
+		strncpy(master_file, master_path, MAX_DPATH - 1);
+		strncat(master_file, file.c_str(), MAX_DPATH - 1);
+
+		strncpy(target_file, real_path, MAX_DPATH - 1);
+		strncat(target_file, file.c_str(), MAX_DPATH - 1);
+
+        copyfile( target_file, master_file, 0 ); // 0 == do not replace if file exists
+	}
+}
+#endif
+
 void RescanROMs()
 {
 	vector<string> files;
 	char path[MAX_DPATH];
+
+#if defined REDQUARK
+    // If an external "ROMs/WHDBoot" device is in use (usb stick), make sure roms directory
+    // contains some valid roms.
+    PopulateExternalRoms();
+#endif
 
 	romlist_clear();
 
@@ -615,6 +656,59 @@ void gui_fps(int fps, int idle, int color)
 	gui_led(LED_SND, (gui_data.sndbuf_status > 1 || gui_data.sndbuf_status < 0) ? 0 : 1, -1);
 }
 
+#ifdef REDQUARK
+
+#define LED_PWR_MASK ( 1<<LED_POWER )
+#define LED_FDD_MASK ( 1<<LED_DF0 | 1<<LED_DF1 | 1<<LED_DF2 | 1<<LED_DF3 | 1<<LED_HD | 1<<LED_CD )
+
+static int fdd_gpio_fd = -1;
+static int pwr_gpio_fd = -1;
+static int temp_fd     = -1;
+static int want_temp   = -1;
+static unsigned int led_gpio_state = 0;
+
+void gui_led_open_gpio()
+{
+    led_gpio_state = 0;
+
+    if( fdd_gpio_fd < 0 && currprefs.disk_led_gpio[0] ) {
+        fdd_gpio_fd = open( currprefs.disk_led_gpio, O_WRONLY );
+
+        if( fdd_gpio_fd >= 0 )
+            write( fdd_gpio_fd, led_gpio_state & LED_FDD_MASK ? "1" : "0", 1 ); // Set initial state
+        else
+            write_log("FDD GPIO: Could not open gpio %s for writing\n", currprefs.disk_led_gpio );
+    }
+
+    if( pwr_gpio_fd < 0 && currprefs.power_led_gpio[0] ) {
+        pwr_gpio_fd = open( currprefs.power_led_gpio, O_WRONLY );
+
+        if( pwr_gpio_fd >= 0 )
+            write( pwr_gpio_fd, led_gpio_state & LED_PWR_MASK ? "1" : "0", 1 ); // Set initial state
+        else
+            write_log("PWR GPIO: Could not open gpio %s for writing\n", currprefs.power_led_gpio );
+    }
+
+#ifdef PLATFORM_SUN50IW6
+#  define TEMPERATURE "/sys/class/thermal/thermal_zone0/temp"
+#else
+#  define TEMPERATURE "/sys/class/rtc/rtc0/max_user_freq" // Fake!
+#endif
+    if( want_temp < 0 ) {
+        char *ep = getenv("MONITOR_TEMP");
+        want_temp = ep != NULL ? atoi(ep) : 0;
+    }
+    if( (want_temp > 0) && temp_fd < 0 ) { 
+        temp_fd = open( TEMPERATURE, O_RDONLY );
+
+        if( temp_fd < 0 )
+            write_log("TEMPERATURE: Could not open %s for reading\n", TEMPERATURE );
+    }
+
+    return;
+}
+#endif
+
 void gui_led(int led, int on, int brightness)
 {
 	unsigned char kbd_led_status;
@@ -657,6 +751,38 @@ void gui_led(int led, int on, int brightness)
 	}
 
 	ioctl(0, KDSETLED, kbd_led_status);
+
+#ifdef REDQUARK
+    if( fdd_gpio_fd >= 0 || pwr_gpio_fd >= 0 ) {
+        unsigned int o_pwr = led_gpio_state & LED_PWR_MASK;
+        unsigned int o_fdd = led_gpio_state & LED_FDD_MASK;
+
+	    if ( (led >= LED_DF0 && led <= LED_DF3) || led == LED_POWER || led == LED_HD || led == LED_CD )
+        {
+            if (on) led_gpio_state |=   1<<led;
+            else    led_gpio_state &= ~(1<<led);
+        }
+
+        unsigned int state = led_gpio_state & LED_PWR_MASK;
+        if( state != o_pwr && pwr_gpio_fd >= 0 )
+            write( pwr_gpio_fd, state ? "1" : "0", 1 );
+
+        state = led_gpio_state & LED_FDD_MASK;
+        if( state != o_fdd && fdd_gpio_fd >= 0 )
+            write( fdd_gpio_fd, state ? "1" : "0", 1 );
+    }
+
+    static unsigned int temp_count = 0;
+    if( temp_fd >= 0 && (++temp_count % 25) == 0 ) {
+        static char tb[10] = {0};
+        lseek( temp_fd, 0, SEEK_SET );
+        int l = read( temp_fd, tb, sizeof(tb) - 1 );
+        if( l > 0 ) {
+            tb[l] = '\0';
+            gui_data.temperature = atoi(tb);
+        }
+    }
+#endif
 }
 
 void gui_filename(int num, const char* name)
@@ -672,7 +798,9 @@ void gui_message(const char* format, ...)
 	vsprintf(msg, format, parms);
 	va_end(parms);
 
+#if !defined REDQUARK
 	if (!uae_gui)
+#endif
 	{
 		// GUI screen is not initialized, output message to the console instead
 		printf("%s\n", msg);

@@ -22,7 +22,13 @@ uae_u32 max_z3fastmem;
 #define BARRIER 32
 
 static uae_u8* additional_mem = static_cast<uae_u8*>(MAP_FAILED);
-#define MAX_RTG_MEM (128 * 1024 * 1024)
+#ifdef REDQUARK
+uae_u32 max_rtgmem = 8 * 1024 * 1024; // Zorro III memory is Max 8Mb so if MAX_RTG_MEM is 8, then 8 + max_z3 we get 16Mb
+#else
+uae_u32 max_rtgmem = 128 * 1024 * 1024;
+#endif
+#define MAX_RTG_MEM max_rtgmem
+
 #define ADDITIONAL_MEMSIZE (max_z3fastmem + MAX_RTG_MEM)
 
 static uae_u8* a3000_mem = static_cast<uae_u8*>(MAP_FAILED);
@@ -59,6 +65,10 @@ void free_AmigaMem(void)
 
 bool can_have_1gb()
 {
+#ifdef REDQUARK
+    return false;
+#endif
+
 	struct sysinfo mem_info{};
 	sysinfo(&mem_info);
 	long long total_phys_mem = mem_info.totalram;
@@ -90,7 +100,11 @@ void alloc_AmigaMem(void)
 	if (can_have_1gb())
 		max_z3fastmem = 1024 * 1024 * 1024;
 	else
+#ifdef REDQUARK
+		max_z3fastmem = 16 * 1024 * 1024;
+#else
 		max_z3fastmem = 512 * 1024 * 1024;
+#endif
 
 	if (!regs.natmem_offset)
 	{
@@ -104,7 +118,7 @@ void alloc_AmigaMem(void)
 		// Allocation successful -> we can use natmem_offset for entire memory access at real address
 		changed_prefs.z3autoconfig_start = currprefs.z3autoconfig_start = Z3BASE_REAL;
 		z3_base_adr = Z3BASE_REAL;
-#if defined(CPU_AARCH64)
+#if defined(CPU_AARCH64) || defined (__x86_64__)
 		write_log("Allocated 16 MB for 24-bit area (0x%016lx) and %d MB for Z3 and RTG at real address (0x%016lx - 0x%016lx)\n",
 			regs.natmem_offset, ADDITIONAL_MEMSIZE / (1024 * 1024), additional_mem, additional_mem + ADDITIONAL_MEMSIZE + BARRIER);
 #else
@@ -123,7 +137,7 @@ void alloc_AmigaMem(void)
 		// Allocation successful -> we can use natmem_offset for entire memory access at fake address
 		changed_prefs.z3autoconfig_start = currprefs.z3autoconfig_start = Z3BASE_UAE;
 		z3_base_adr = Z3BASE_UAE;
-#if defined(CPU_AARCH64)
+#if defined(CPU_AARCH64) || defined (__x86_64__)
 		write_log("Allocated 16 MB for 24-bit area (0x%016lx) and %d MB for Z3 and RTG at fake address (0x%016lx - 0x%016lx)\n",
 			regs.natmem_offset, ADDITIONAL_MEMSIZE / (1024 * 1024), additional_mem, additional_mem + ADDITIONAL_MEMSIZE + BARRIER);
 #else
@@ -148,7 +162,7 @@ void alloc_AmigaMem(void)
 		changed_prefs.z3autoconfig_start = currprefs.z3autoconfig_start = Z3BASE_UAE;
 		z3_base_adr = Z3BASE_UAE;
 		write_log("Allocated %d MB for entire memory\n", natmem_size / (1024 * 1024));
-#if defined(CPU_AARCH64)
+#if defined(CPU_AARCH64) || defined (__x86_64__)
 		if (((uae_u64)(regs.natmem_offset + natmem_size + BARRIER) & 0xffffffff00000000) != 0)
 			write_log("Memory address is higher than 32 bit. JIT will crash\n");
 #endif
@@ -172,7 +186,7 @@ void alloc_AmigaMem(void)
 
 	write_log("Reserved: %p-%p (0x%08x %dM)\n", regs.natmem_offset, static_cast<uae_u8*>(regs.natmem_offset) + natmem_size,
 		natmem_size, natmem_size >> 20);
-#if defined(CPU_AARCH64)
+#if defined(CPU_AARCH64) || defined (__x86_64__)
 	if (((uae_u64)(regs.natmem_offset + natmem_size + BARRIER) & 0xffffffff00000000) != 0)
 		write_log("Memory address is higher than 32 bit. JIT will crash\n");
 #endif

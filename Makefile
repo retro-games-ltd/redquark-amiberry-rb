@@ -26,6 +26,17 @@ endif
 #
 DISPMANX_FLAGS = -DUSE_DISPMANX -I/opt/vc/include -I/opt/vc/include/interface/vmcs_host/linux -I/opt/vc/include/interface/vcos/pthreads 
 DISPMANX_LDFLAGS = -lbcm_host -lvchiq_arm -L/opt/vc/lib -Wl,-rpath=/opt/vc/lib
+                        
+ifneq (,$(findstring redquark,$(PLATFORM)))
+MALIFB_CFLAGS  ?= $(shell pkg-config malifb --cflags )
+MALIFB_LDFLAGS ?= $(shell pkg-config malifb --libs )
+endif
+
+#
+# libgo2 flags (Odroid Go Advance)
+#
+LIBGO2_FLAGS = -DUSE_LIBGO2 -Iexternal/libgo2/src
+LIBGO2_LDFLAGS = -lgo2
 
 CPPFLAGS=-MD -MT $@ -MF $(@:%.o=%.d)
 #DEBUG=1
@@ -194,12 +205,63 @@ else ifeq ($(PLATFORM),jetson-nano)
     CPPFLAGS += -DCPU_AARCH64 -D_FILE_OFFSET_BITS=64
     AARCH64 = 1
 
+# Intel bodge
+else ifeq ($(PLATFORM),redquark-amd64)
+    CPUFLAGS += -march=nocona
+    CPPFLAGS += -D_FILE_OFFSET_BITS=64 -DSOFTWARE_CURSOR -DUSE_RENDER_THREAD -DCPU_AMD64 -DREDQUARK
+    #CPPFLAGS += -D_FILE_OFFSET_BITS=64 -DSOFTWARE_CURSOR -DUSE_RENDER_THREAD -DCPU_AMD64
+    CPPFLAGS += $(MALIFB_CFLAGS)
+    LDFLAGS += ${MALIFB_LDFLAGS}
+    ifdef DEBUG
+	    # Otherwise we'll get compilation errors, check https://tls.mbed.org/kb/development/arm-thumb-error-r7-cannot-be-used-in-asm-here
+	    # quote: The assembly code in bn_mul.h is optimized for the ARM platform and uses some registers, including r7 to efficiently do an operation. GCC also uses r7 as the frame pointer under ARM Thumb assembly.
+        MORE_CFLAGS += -fomit-frame-pointer
+	endif
+
+# Redquark sun8i / H3
+else ifeq ($(PLATFORM),redquark-sun8i)
+    CPUFLAGS += -mcpu=cortex-a7 -mfpu=neon-vfpv4
+    CPPFLAGS += -DARMV6_ASSEMBLY -D_FILE_OFFSET_BITS=64 -DARMV6T2 -DUSE_ARMNEON -DARM_HAS_DIV -DREDQUARK
+    CPPFLAGS += $(MALIFB_CFLAGS)
+    LDFLAGS += ${MALIFB_LDFLAGS}
+    HAVE_NEON = 1
+    ifdef DEBUG
+	    # Otherwise we'll get compilation errors, check https://tls.mbed.org/kb/development/arm-thumb-error-r7-cannot-be-used-in-asm-here
+	    # quote: The assembly code in bn_mul.h is optimized for the ARM platform and uses some registers, including r7 to efficiently do an operation. GCC also uses r7 as the frame pointer under ARM Thumb assembly.
+        MORE_CFLAGS += -fomit-frame-pointer
+	endif
+
+# sun50i H6
+else ifeq ($(PLATFORM),sun50i)
+    CPUFLAGS += -mcpu=cortex-a53 -mfpu=neon-fp-armv8
+    CPPFLAGS += -DARMV6_ASSEMBLY -D_FILE_OFFSET_BITS=64 -DARMV6T2 -DUSE_ARMNEON -DARM_HAS_DIV -DUSE_RENDER_THREAD
+    HAVE_NEON = 1
+    ifdef DEBUG
+	    # Otherwise we'll get compilation errors, check https://tls.mbed.org/kb/development/arm-thumb-error-r7-cannot-be-used-in-asm-here
+	    # quote: The assembly code in bn_mul.h is optimized for the ARM platform and uses some registers, including r7 to efficiently do an operation. GCC also uses r7 as the frame pointer under ARM Thumb assembly.
+        MORE_CFLAGS += -fomit-frame-pointer
+	endif
+
+# Redquark sun50i H6
+else ifeq ($(PLATFORM),redquark-sun50i)
+    CPUFLAGS += -mcpu=cortex-a53 -mfpu=neon-fp-armv8
+    CPPFLAGS += -DARMV6_ASSEMBLY -D_FILE_OFFSET_BITS=64 -DARMV6T2 -DUSE_ARMNEON -DARM_HAS_DIV -DREDQUARK -DPLATFORM_SUN50IW6
+    CPPFLAGS += $(MALIFB_CFLAGS)
+    LDFLAGS += ${MALIFB_LDFLAGS}
+    HAVE_NEON = 1
+    ifdef DEBUG
+	    # Otherwise we'll get compilation errors, check https://tls.mbed.org/kb/development/arm-thumb-error-r7-cannot-be-used-in-asm-here
+	    # quote: The assembly code in bn_mul.h is optimized for the ARM platform and uses some registers, including r7 to efficiently do an operation. GCC also uses r7 as the frame pointer under ARM Thumb assembly.
+        MORE_CFLAGS += -fomit-frame-pointer
+	endif
 else
 $(error Unknown platform:$(PLATFORM))
 endif
 
+$(info Building platform:$(PLATFORM))
+
 RM     = rm -f
-AS     = as
+AS     ?= as
 CC     ?= gcc
 CXX    ?= g++
 STRIP  ?= strip
@@ -221,7 +283,9 @@ LDFLAGS += $(SDL_LDFLAGS) -lSDL2_image -lSDL2_ttf -lguisan -Lexternal/libguisan/
 #
 DEFS = $(XML_CFLAGS) -DAMIBERRY
 CPPFLAGS += -Isrc -Isrc/osdep -Isrc/threaddep -Isrc/include -Isrc/archivers $(DEFS)
-XML_CFLAGS := $(shell xml2-config --cflags )
+
+XML2_CONFIG ?= xml2-config
+XML_CFLAGS := $(shell $(XML2_CONFIG) --cflags )
 LDFLAGS += -Wl,-O1 -Wl,--hash-style=gnu -Wl,--as-needed
 
 ifndef DEBUG
@@ -433,6 +497,13 @@ OBJS += src/osdep/gui/androidsdl_event.o \
 	src/osdep/gui/PanelOnScreen.o
 endif
 
+ifneq (,$(findstring redquark,$(PLATFORM)))
+OBJS +=	\
+	src/osdep/virtual_keyboard.o
+endif
+
+WITHJIT=1
+
 ifdef AARCH64
 OBJS += src/osdep/aarch64_helper.o
 src/osdep/aarch64_helper.o: src/osdep/aarch64_helper.s
@@ -441,6 +512,8 @@ else ifeq ($(PLATFORM),$(filter $(PLATFORM),rpi1 rpi1-sdl2))
 OBJS += src/osdep/arm_helper.o
 src/osdep/arm_helper.o: src/osdep/arm_helper.s
 	$(AS) $(ASFLAGS) -o src/osdep/arm_helper.o -c src/osdep/arm_helper.s
+else ifneq (,$(findstring amd64,$(PLATFORM)))
+	WITHJIT = 0
 else
 OBJS += src/osdep/neon_helper.o
 src/osdep/neon_helper.o: src/osdep/neon_helper.s
@@ -456,16 +529,19 @@ OBJS += src/newcpu.o \
 	src/cpuemu_4.o \
 	src/cpuemu_11.o \
 	src/cpuemu_40.o \
-	src/cpuemu_44.o \
-	src/jit/compemu.o \
+	src/cpuemu_44.o 
+
+ifeq ($(WITHJIT), 1)
+OBJS += src/jit/compemu.o \
 	src/jit/compstbl.o \
 	src/jit/compemu_fpp.o \
 	src/jit/compemu_support.o
+endif
 
 DEPS = $(OBJS:%.o=%.d) $(C_OBJS:%.o=%.d)
 
 $(PROG): $(OBJS) $(C_OBJS)
-	$(CXX) -o $(PROG) $(OBJS) $(C_OBJS) $(LDFLAGS)
+	$(CXX) $(CXXFLAGS) -o $(PROG) $(OBJS) $(C_OBJS) $(LDFLAGS)
 ifndef DEBUG
 # want to keep a copy of the binary before stripping? Then enable the below line
 #	cp $(PROG) $(PROG)-debug
@@ -485,5 +561,5 @@ bootrom:
 
 guisan:
 	$(MAKE) -C external/libguisan
-	
+
 -include $(DEPS)

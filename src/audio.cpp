@@ -1914,6 +1914,35 @@ static void set_extra_prehandler(void)
 	}
 }
 
+#ifdef REDQUARK
+static inline void _set_volume();
+static int redquark_volume_i = 0;
+static float redquark_volume = 0.0f; // Start off quiet
+
+int get_volume(void)
+{
+    return redquark_volume_i;
+}
+
+void set_volume( int vol ) // 0..100
+{
+    if(vol > 100 ) vol = 100;
+
+    redquark_volume_i = vol;
+    redquark_volume = (float)vol / 100;
+
+    _set_volume();
+}
+#else
+#define redquark_volume 1
+#endif
+
+static inline void _set_volume()
+{
+	sound_cd_volume[0] = sound_cd_volume[1] = redquark_volume * (100 - (currprefs.sound_volume_cd < 0 ? 0 : currprefs.sound_volume_cd)) * 32768 / 100;
+	sound_paula_volume[0] = sound_paula_volume[1] = redquark_volume * (100 - currprefs.sound_volume_paula) * 32768 / 100;
+}
+
 void set_audio (void)
 {
 	int old_mixed_size = mixed_stereo_size;
@@ -1945,9 +1974,7 @@ void set_audio (void)
 	currprefs.sound_stereo_swap_paula = changed_prefs.sound_stereo_swap_paula;
 	currprefs.sound_stereo_swap_ahi = changed_prefs.sound_stereo_swap_ahi;
 
-	sound_cd_volume[0] = sound_cd_volume[1] = (100 - (currprefs.sound_volume_cd < 0 ? 0 : currprefs.sound_volume_cd)) * 32768 / 100;
-	sound_paula_volume[0] = sound_paula_volume[1] = (100 - currprefs.sound_volume_paula) * 32768 / 100;
-	//sndboard_ext_volume();
+    _set_volume();
 
 	if (ch >= 0) {
 		if (currprefs.produce_sound >= 2) {

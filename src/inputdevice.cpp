@@ -43,6 +43,9 @@
 #include "amiberry_gfx.h"
 #include "cdtv.h"
 #include "statusline.h"
+#ifdef REDQUARK
+#include "virtual_keyboard.h"
+#endif
 
 #define COMPA_RESERVED_FLAGS (ID_FLAG_INVERT)
 
@@ -429,6 +432,9 @@ static void copyjport (const struct uae_prefs *src, struct uae_prefs *dst, int n
   dst->jports[num].amiberry_custom_hotkey = src->jports[num].amiberry_custom_hotkey;
   dst->jports[num].amiberry_custom_left_trigger = src->jports[num].amiberry_custom_left_trigger;
   dst->jports[num].amiberry_custom_right_trigger = src->jports[num].amiberry_custom_right_trigger;
+#endif
+#ifdef REDQUARK
+  dst->jports[num].hotbutton = src->jports[num].hotbutton;
 #endif
 	dst->jports[num].nokeyboardoverride = src->jports[num].nokeyboardoverride;
 }
@@ -920,6 +926,9 @@ void write_inputdevice_config (struct uae_prefs *p, struct zfile *f)
 	cfgfile_write (f, _T("input.analog_joystick_multiplier"), _T("%d"), p->input_analog_joystick_mult);
 	cfgfile_write (f, _T("input.analog_joystick_offset"), _T("%d"), p->input_analog_joystick_offset);
 	cfgfile_write (f, _T("input.mouse_speed"), _T("%d"), p->input_mouse_speed);
+#ifdef REDQUARK
+	cfgfile_write (f, _T("input.mouse_sensitivity"), _T("%d"), p->input_mouse_sensitivity);
+#endif
 	cfgfile_write (f, _T("input.autofire_speed"), _T("%d"), p->input_autofire_linecnt);
 	cfgfile_write (f, _T("input.autoswitch"), _T("%d"), p->input_autoswitch);
 	cfgfile_dwrite_str (f, _T("input.keyboard_type"), kbtypes[p->input_keyboard_type]);
@@ -1105,7 +1114,6 @@ static void clear_id (struct uae_input_device *id)
 		for (j = 0; j < MAX_INPUT_SUB_EVENT_ALL; j++)
 			xfree (id->custom[i][j]);
 	}
-
 	TCHAR *cn = id->configname;
 	TCHAR *n = id->name;
 	memset (id, 0, sizeof (struct uae_input_device));
@@ -1444,6 +1452,10 @@ void read_inputdevice_config (struct uae_prefs *pr, const TCHAR *option, TCHAR *
 		pr->input_joymouse_deadzone = _tstol(value);
 	if (!_tcsicmp(p, _T("mouse_speed")))
 		pr->input_mouse_speed = _tstol(value);
+#ifdef REDQUARK
+	if (!_tcsicmp(p, _T("mouse_sensitivity")))
+		pr->input_mouse_sensitivity = _tstol(value);
+#endif
 	if (!_tcsicmp(p, _T("autofire")))
 		pr->input_autofire_linecnt = _tstol(value) * 312;
 	if (!_tcsicmp(p, _T("autofire_speed")))
@@ -3759,6 +3771,11 @@ void inputdevice_add_inputcode (int code, int state, const TCHAR *s)
 
 void inputdevice_do_keyboard (int code, int state)
 {
+#ifdef REDQUARK
+    // Check if key has been squished?
+    if( code < MAX_INPUT_DEVICE_EVENTS && currprefs.ignore_keycodes[code] ) 
+        return;
+#endif
 #ifdef CDTV
 	if (code >= 0x72 && code <= 0x77) { // CDTV keys
 		if (cdtv_front_panel (-1)) {
@@ -4090,6 +4107,15 @@ static bool inputdevice_handle_inputcode2(int code, int state, const TCHAR *s)
 	case AKS_QUIT:
 		uae_quit ();
 		break;
+	case AKS_SHUTDOWN:
+        host_poweroff = true;
+		uae_quit ();
+		break;
+#ifdef REDQUARK
+	case AKS_VIRTUAL_KEYBOARD:
+        virtual_keyboard_enable();
+		break;
+#endif
 	case AKS_SOFTRESET:
 		uae_reset (0, 0);
 		break;
@@ -4351,8 +4377,12 @@ static int handle_input_event2(int nr, int state, int max, int flags, int extra)
 				tablet_lightpen(x, y, 65535, 65535, 0, 0, false, -1, lpnum);
 			} else if (ie->type == 0) {
 				int delta = 0;
-				if (max == 0) {
-					delta = state * currprefs.input_mouse_speed / 100;
+                if (max == 0) {
+#ifdef REDQUARK
+                    delta = state * ( ((100 + currprefs.input_mouse_sensitivity) * currprefs.input_mouse_speed) / 10000.0f);
+#else
+                    delta = state * currprefs.input_mouse_speed / 100.0f;
+#endif
 				} else {
 					int deadzone = currprefs.input_joymouse_deadzone * max / 100;
 					if (state <= deadzone && state >= -deadzone) {
@@ -4719,6 +4749,9 @@ static void inputdevice_checkconfig (void)
 		currprefs.input_autofire_linecnt != changed_prefs.input_autofire_linecnt ||
 		currprefs.input_autoswitch != changed_prefs.input_autoswitch ||
 		currprefs.input_device_match_mask != changed_prefs.input_device_match_mask ||
+#ifdef REDQUARK
+		currprefs.input_mouse_sensitivity != changed_prefs.input_mouse_sensitivity ||
+#endif
 		currprefs.input_mouse_speed != changed_prefs.input_mouse_speed) {
 
 			currprefs.input_selected_setting = changed_prefs.input_selected_setting;
@@ -4730,6 +4763,9 @@ static void inputdevice_checkconfig (void)
 			currprefs.input_mouse_speed = changed_prefs.input_mouse_speed;
 			currprefs.input_autoswitch = changed_prefs.input_autoswitch;
 			currprefs.input_device_match_mask = changed_prefs.input_device_match_mask;
+#ifdef REDQUARK
+		    currprefs.input_mouse_sensitivity = changed_prefs.input_mouse_sensitivity;
+#endif
 
 			inputdevice_updateconfig (&changed_prefs, &currprefs);
 	}
@@ -7068,6 +7104,9 @@ void inputdevice_default_prefs (struct uae_prefs *p)
 	p->input_analog_joystick_mult = 18;
 	p->input_analog_joystick_offset = -5;
 	p->input_mouse_speed = amiberry_options.input_default_mouse_speed;
+#ifdef REDQUARK
+	p->input_mouse_sensitivity = 0;
+#endif
 	p->input_autofire_linecnt = 600;
 	p->input_keyboard_type = 0;
 	p->input_autoswitch = true;
@@ -7843,6 +7882,9 @@ void inputdevice_copyconfig (struct uae_prefs *src, struct uae_prefs *dst)
 	dst->input_joymouse_speed = src->input_joymouse_speed;
 	dst->input_mouse_speed = src->input_mouse_speed;
 	dst->input_autofire_linecnt = src->input_autofire_linecnt;
+#ifdef REDQUARK
+	dst->input_mouse_sensitivity = src->input_mouse_sensitivity;
+#endif
 #ifdef AMIBERRY
 	strcpy(dst->open_gui, src->open_gui);
 	strcpy(dst->quit_amiberry, src->quit_amiberry);
@@ -8283,7 +8325,12 @@ void setmousestate (int mouse, int axis, int data, int isabs)
 		}
 		*oldm_p = *mouse_p;
 		*mouse_p += data;
-		d = (*mouse_p - *oldm_p) * currprefs.input_mouse_speed / 100.0f;
+
+#ifdef REDQUARK
+		d = (*mouse_p - *oldm_p) * ( ((100 + currprefs.input_mouse_sensitivity) * currprefs.input_mouse_speed) / 10000.0f);
+#else
+		d = (*mouse_p - *oldm_p) * (currprefs.input_mouse_speed / 100.0f);
+#endif
 	} else {
 		extraflags |= HANDLE_IE_FLAG_ABSOLUTE;
 		extrastate = data;

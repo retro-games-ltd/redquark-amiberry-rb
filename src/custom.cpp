@@ -7,7 +7,6 @@
 * Copyright 1995 Alessandro Bissacco
 * Copyright 2000-2015 Toni Wilen
 */
-
 #include "sysconfig.h"
 #include "sysdeps.h"
 
@@ -4212,7 +4211,13 @@ void compute_vsynctime (void)
 	double shpos = maxhpos_short;
 	double syncadjust = 1.0;
 
+#if defined REDQUARK
+    // Fixed output sync of 50/60Hz, so make sure real frame/audio period matches this
+	fake_vblank_hz = currprefs.ntscmode ? 60 : 50;
+#else
 	fake_vblank_hz = 0;
+#endif
+
 	vblank_hz_mult = 0;
 	vblank_hz_state = 1;
 	if (fabs (currprefs.chipset_refreshrate) > 0.1) {
@@ -7571,6 +7576,9 @@ static int mavg (struct mavg_data *md, int newval, int size)
 
 static bool framewait(void)
 {
+//const auto debug_start = read_processor_time();
+//static int ic=0;
+
 	struct amigadisplay *ad = &adisplays;
 	frame_time_t curr_time;
 	frame_time_t start;
@@ -7617,6 +7625,7 @@ static bool framewait(void)
 			vsynctimeperline = 1;
 
 		frame_shown = true;
+//if((ic++ % 50)==0) printf("Fraimwait took %d [A]\n", read_processor_time() - debug_start  );
 		return 1;
 	}
 
@@ -7697,6 +7706,7 @@ static bool framewait(void)
 		frame_shown = true;
 
 	}
+//if((ic++ % 50)==0) printf("Fraimwait took %d [B]\n", read_processor_time() - debug_start  );
 	return status != 0;
 }
 
@@ -7732,6 +7742,14 @@ static void fpscounter (bool frameok)
 	if (bogusframe || int(last) < 0)
 		return;
 
+	//if (currprefs.gfx_framerate == 2)
+	//	idletime >>= 1;
+	
+//#define REPORT_FRAME_TIME
+#ifdef REPORT_FRAME_TIME
+    unsigned long int sidletime = idletime;
+#endif
+
 	mavg (&fps_mavg, last / 10, FPSCOUNTER_MAVG_SIZE);
 	mavg (&idle_mavg, idletime / 10, FPSCOUNTER_MAVG_SIZE);
 	idletime = 0;
@@ -7742,6 +7760,7 @@ static void fpscounter (bool frameok)
 	if ((timeframes & 7) == 0) {
 		double idle = 1000 - (idle_mavg.mavg == 0 ? 0.0 : double(idle_mavg.mavg) * 1000.0 / vsynctimebase);
 		int fps = fps_mavg.mavg == 0 ? 0 : syncbase * 10 / fps_mavg.mavg;
+
 		if (fps > 99999)
 			fps = 99999;
 		if (idle < 0)
@@ -7760,6 +7779,9 @@ static void fpscounter (bool frameok)
 		if ((timeframes & 15) == 0) {
 			gui_fps (fps, int(idle), frameok ? 0 : 1);
 		}
+#ifdef REPORT_FRAME_TIME
+        printf("idletime = %d  idle_mavg.mavg = %d  vsynctimebase = %d  idle = %lf  syncbase %d  fps %d\n", sidletime, idle_mavg.mavg, vsynctimebase, idle, syncbase, (fps + 5) / 10 );
+#endif
 	}
 }
 
@@ -8458,7 +8480,7 @@ static void hsync_handler_post (bool onvsync)
 
 	if (!currprefs.cpu_thread && !cpu_sleepmode && currprefs.m68k_speed < 0 && !currprefs.cpu_memory_cycle_exact) {
 
-		static int sleeps_remaining;
+		static int sleeps_remaining = 0;
 		if (is_last_line ()) {
 			sleeps_remaining = (165 - currprefs.cpu_idle) / 6;
 			if (sleeps_remaining < 0)
@@ -8891,7 +8913,7 @@ void custom_reset (bool hardreset, bool keyboardreset)
 	diwstate = DIW_waiting_start;
 
 	dmal = 0;
-#ifdef USE_DISPMANX
+#if defined USE_DISPMANX || defined REDQUARK
 	time_per_frame = 1000 * 1000 / (currprefs.ntscmode ? 60 : 50);
 #endif
 	init_hz_normal();

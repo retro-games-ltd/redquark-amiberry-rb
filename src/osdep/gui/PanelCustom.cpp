@@ -139,6 +139,7 @@ const int RemapEventList[] = {
 	INPUTEVENT_SPC_MOUSEMAP_PORT0_LEFT, INPUTEVENT_SPC_MOUSEMAP_PORT0_RIGHT,
 	INPUTEVENT_SPC_MOUSEMAP_PORT1_LEFT, INPUTEVENT_SPC_MOUSEMAP_PORT1_RIGHT,
 	INPUTEVENT_SPC_MOUSE_SPEED_DOWN, INPUTEVENT_SPC_MOUSE_SPEED_UP,
+    INPUTEVENT_SPC_VIRTUAL_KEYBOARD,
 
 };
 
@@ -550,7 +551,17 @@ void RefreshPanelCustom(void)
 		&& changed_prefs.jports[SelectedPort].id < JSEM_MICE - 1)
 	{
 		const auto hostjoyid = changed_prefs.jports[SelectedPort].id - JSEM_JOYS - num_keys_as_joys;
-		strncpy(tmp, SDL_JoystickNameForIndex(hostjoyid), 255);
+        const char *js_name = nullptr;
+#ifdef REDQUARK
+        js_name = SDL_GameControllerNameForIndex( hostjoyid );
+        if( js_name == nullptr ) // If controller is not mapped in gamecontrollerdb
+#else
+        if( 1 )
+#endif
+        {
+            js_name = SDL_JoystickNameForIndex(hostjoyid);
+        }
+		strncpy(tmp, js_name, 255 );
 
 		for (auto n = 0; n < 14; ++n)
 		{

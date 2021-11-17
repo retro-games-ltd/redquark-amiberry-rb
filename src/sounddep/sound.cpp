@@ -42,6 +42,8 @@ struct sound_dp
 	int pullbuffermaxlen;
 	double avg_correct;
 	double cnt_correct;
+	int stream_initialised;
+    int silence_written;
 };
 
 #define SND_STATUSCNT 10
@@ -81,6 +83,13 @@ static int sound_pull = 1;
 
 int setup_sound(void)
 {
+#if defined REDQUARK
+    // Redquark has occasional audio frame underruns when handled using a pull callback..
+    // I think the callback occasionally occurs just before the data is ready...
+    // Pushing data seems to avoid this, The choppy end-level music in AB3D is worse using PUSH, so
+    // allow push/pull to be configured.
+	sound_pull = currprefs.sound_pullmode ? 1 : 0;
+#endif
 	sound_available = 1;
 	return 1;
 }
@@ -268,10 +277,17 @@ static void finish_sound_buffer_pull(struct sound_data* sd, uae_u16* sndbuffer)
 
 	if (s->pullbufferlen + sd->sndbufsize > s->pullbuffermaxlen) {
 		write_log(_T("pull overflow! %d %d %d\n"), s->pullbufferlen, sd->sndbufsize, s->pullbuffermaxlen);
+        //printf(_T("sound overflow! %d %d %d\n"), s->pullbufferlen, sd->sndbufsize, s->pullbuffermaxlen);
 		s->pullbufferlen = 0;
+		gui_data.sndbuf_status = 1;
 	}
+    else gui_data.sndbuf_status = 0;
 	memcpy(s->pullbuffer + s->pullbufferlen, sndbuffer, sd->sndbufsize);
 	s->pullbufferlen += sd->sndbufsize;
+
+#if defined REDQUARK
+	gui_data.sndbuf = (1000.0f * s->pullbufferlen) / s->pullbuffermaxlen;
+#endif
 }
 
 static int open_audio_sdl2(struct sound_data* sd, int index)
@@ -283,6 +299,7 @@ static int open_audio_sdl2(struct sound_data* sd, int index)
 	sd->devicetype = SOUND_DEVICE_SDL2;
 	if (sd->sndbufsize < 0x80)
 		sd->sndbufsize = 0x80;
+
 	s->framesperbuffer = sd->sndbufsize;
 	s->sndbufsize = s->framesperbuffer;
 	sd->sndbufsize = s->sndbufsize * ch * 2;
@@ -395,6 +412,9 @@ static int open_sound()
 	have_sound = 1;
 	sound_available = 1;
 	gui_data.sndbuf_avail = audio_is_pull() == 0;
+#if defined REDQUARK
+	gui_data.sndbuf_avail = true;
+#endif
 	
 	paula_sndbufsize = sdp->sndbufsize;
 	paula_sndbufpt = paula_sndbuffer;
@@ -502,8 +522,13 @@ void restart_sound_buffer()
 
 static void finish_sound_buffer_sdl2_push(struct sound_data* sd, uae_u16* sndbuffer)
 {
-	struct sound_dp* s = sd->data;
-	SDL_QueueAudio(dev, sndbuffer, sd->sndbufsize);
+    struct sound_dp* s = sd->data;
+    if (sd->mute) {
+        memset(sndbuffer, 0, sd->sndbufsize);
+        s->silence_written++; // In push mode no sound gen means no audio push so this might not incremented frequently
+    }
+    SDL_QueueAudio(dev, sndbuffer, sd->sndbufsize);
+
 }
 
 static void finish_sound_buffer_sdl2(struct sound_data *sd, uae_u16 *sndbuffer)
@@ -720,7 +745,6 @@ void sound_mute(int newmute)
 	set_volume(currprefs.sound_volume_master, sdp->mute);
 	config_changed = 1;
 }
-
 void sound_volume(int dir)
 {
 	currprefs.sound_volume_master -= dir * 10;
@@ -763,11 +787,20 @@ void sdl2_audio_callback(void* userdata, Uint8* stream, int len)
 	auto* sd = static_cast<sound_data*>(userdata);
 	auto* s = sd->data;
 
-	if (s->pullbufferlen <= 0)
+    if (!s->stream_initialised || sd->mute) {
+        memset(stream, 0, len);
+        if( sd->mute ) s->silence_written++;
+        s->stream_initialised = 1;
+    }
+
+	if (s->pullbufferlen <= 0) {
+		gui_data.sndbuf_status = -1;
+        //printf(_T("audio underflow! %d %d %d\n"), s->pullbufferlen, sd->sndbufsize, s->pullbuffermaxlen);
 		return;
+    }
 
 	const unsigned int bytes_to_copy = s->framesperbuffer * sd->samplesize;	
-	if (bytes_to_copy > 0) {
+	if (sd->mute == 0 && bytes_to_copy > 0) {
 		memcpy(stream, s->pullbuffer, bytes_to_copy);
 	}
 
@@ -775,4 +808,10 @@ void sdl2_audio_callback(void* userdata, Uint8* stream, int len)
 		memmove(s->pullbuffer, s->pullbuffer + bytes_to_copy, s->pullbufferlen - bytes_to_copy);
 	}
 	s->pullbufferlen -= bytes_to_copy;
+}
+
+int sound_get_silence()
+{
+	auto* s = sdp->data;
+    return s->silence_written;
 }

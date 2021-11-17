@@ -9523,6 +9523,32 @@ uae_u8 *restore_filesys (uae_u8 *src)
 		xfree (volname);
 		volname = NULL;
 	}
+
+#if defined REDQUARK
+    // Okay this is a bit of a hack to make sure that all snapshots
+    // have their Saves DH pointing to WHDBOOT_SAVE_DATA, if set.
+    //
+    if( strcmp( volname, "Saves" ) == 0 )
+    {
+        static const TCHAR *saves_path = NULL;
+        static int overridden_saves = -1;
+
+        if( overridden_saves < 0 ) {
+            saves_path = getenv("WHDBOOT_SAVE_DATA");
+            overridden_saves = (saves_path == NULL) ? 0 : 1;
+            //if( saves_path == NULL ) saves_path = _T("/tmp/saves");
+        }
+
+        if( overridden_saves ) {
+            xfree(rootdir);
+            rootdir = strdup( saves_path );
+	        //ui->readonly = ci->readonly = true;
+        }
+
+    }
+    //printf("Restore [%s] [%s] [%s] [%s] %s\n", devname, volname, filesysdir, rootdir, ui->volflags & MYVOLUMEINFO_READONLY ? "RO" : "RW" );
+#endif
+
 	_tcscpy (ci->rootdir, rootdir);
 	_tcscpy (ci->devname, devname);
 	_tcscpy (ci->volname, volname ? volname : _T(""));

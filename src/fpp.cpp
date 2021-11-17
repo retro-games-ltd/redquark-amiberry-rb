@@ -2351,7 +2351,8 @@ void fpuop_arithmetic (uae_u32 opcode, uae_u16 extra)
 void fpu_reset (void)
 {
 #if defined(CPU_i386) || defined(CPU_x86_64)
-	init_fpucw_x87();
+#warning FIXME Implement init_fpucw_x87();
+	//init_fpucw_x87();
 #endif
 
 	regs.fpu_exp_state = 0;
@@ -2494,3 +2495,4 @@ uae_u8 *save_fpu (int *len, uae_u8 *dstptr)
 	*len = dst - dstbak;
 	return dstbak;
 }
+

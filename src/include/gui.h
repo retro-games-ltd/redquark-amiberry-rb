@@ -31,6 +31,10 @@ extern void gui_display (int shortcut);
 
 extern bool no_gui, quit_to_gui;
 
+#if defined REDQUARK
+void gui_led_open_gpio();
+#endif
+
 #define LED_CD_ACTIVE 1
 #define LED_CD_ACTIVE2 2
 #define LED_CD_AUDIO 4
@@ -74,6 +78,9 @@ struct gui_info
     int sndbuf, sndbuf_status;
 	bool sndbuf_avail;
 	struct gui_info_drive drives[4];
+#if defined REDQUARK
+    int temperature;
+#endif
 };
 #define NUM_LEDS (LED_MAX)
 #define VISIBLE_LEDS (LED_MAX - 1)
