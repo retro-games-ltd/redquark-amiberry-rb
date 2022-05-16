@@ -399,6 +399,15 @@ static const TCHAR* obsolete[] = {
 
 #define UNEXPANDED _T("$(FILE_PATH)")
 
+#if defined REDQUARK
+// Prevent "fastest" mode from being used, to stop SoC getting hot - just a precaution
+//static void restrict_fastest_cpu(struct uae_prefs* p)
+//{
+//    if( p->m68k_speed < 0 ) p->m68k_speed = M68K_SPEED_25MHZ_CYCLES;
+//}
+//#else
+# define restrict_fastest_cpu(p) {}
+#endif
 
 static TCHAR* cfgfile_unescape(const TCHAR* s, const TCHAR** endpos, TCHAR separator, bool min)
 {
@@ -5956,11 +5965,13 @@ static int cfgfile_parse_hardware(struct uae_prefs* p, const TCHAR* option, TCHA
 	/* Broken earlier versions used to write this out as a string.  */
 	if (cfgfile_strval (option, value, _T("finegraincpu_speed"), &p->m68k_speed, speedmode, 1)) {
 		p->m68k_speed--;
+        restrict_fastest_cpu(p);
 		return 1;
 	}
 
 	if (cfgfile_strval(option, value, _T("cpu_speed"), &p->m68k_speed, speedmode, 1)) {
 		p->m68k_speed--;
+        restrict_fastest_cpu(p);
 		return 1;
 	}
 	if (cfgfile_intval (option, value, _T("cpu_speed"), &p->m68k_speed, 1)) {
@@ -5988,6 +5999,7 @@ static int cfgfile_parse_hardware(struct uae_prefs* p, const TCHAR* option, TCHA
 		}
 		if (_tcsicmp(value, _T("max")) == 0)
 			p->m68k_speed = -1;
+        restrict_fastest_cpu(p);
 		return 1;
 	}
 	if (cfgfile_doubleval(option, value, _T("blitter_throttle"), &p->blitter_speed_throttle)) {
@@ -7056,6 +7068,7 @@ int parse_cmdline_option(struct uae_prefs* p, TCHAR c, const TCHAR* arg)
 		break;
 
 	case 'w': p->m68k_speed = _tstoi(arg);
+        restrict_fastest_cpu(p);
 		break;
 
 	case 'G': p->start_gui = false;

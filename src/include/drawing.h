@@ -355,4 +355,8 @@ void set_inhibit_frame(int bit);
 void clear_inhibit_frame(int bit);
 void toggle_inhibit_frame(int bit);
 
+#ifdef REDQUARK
+void get_display_center( int *top, int *bottom );
+#endif
+
 #endif /* UAE_DRAWING_H */

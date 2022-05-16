@@ -2044,7 +2044,7 @@ static int get_order(struct uae_prefs *p, struct card_data *cd)
 		return -1;
 	if (cd->zorro >= 4)
 		return -2;
-	if (cd->rc)
+	if (cd->rc && cd->rc->back)
 		return cd->rc->back->device_order;
 	int devnum = (cd->flags >> 16) & 255;
 	if (!_tcsicmp(cd->name, _T("Z2Fast")))
@@ -2087,7 +2087,7 @@ static void expansion_parse_cards(struct uae_prefs *p, bool log)
 		if (ok) {
 			TCHAR label[MAX_DPATH];
 			label[0] = 0;
-			if (cd->rc && !label[0]) {
+			if (cd->rc && !label[0] && cd->rc->back ) {
 				const struct expansionromtype *ert = get_device_expansion_rom(cd->rc->back->device_type);
 				if (ert) {
 					_tcscpy(label, ert->friendlyname);
@@ -2654,7 +2654,7 @@ uae_u8 *save_expansion_boards(int *len, uae_u8 *dstptr, int cardnum)
 		save_u8(ec->aci.autoconfig_bytes[j]);
 	}
 	struct romconfig *rc = ec->rc;
-	if (rc) {
+	if (rc && rc->back) {
 		save_u32(rc->back->device_type);
 		save_u32(rc->back->device_num);
 		save_string(rc->romfile);

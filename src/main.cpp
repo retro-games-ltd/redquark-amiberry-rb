@@ -46,6 +46,9 @@
 
 #include "consolehook.h"
 #include "keyboard.h"
+#ifdef REDQUARK
+#include "playlist.h"
+#endif
 
 long int version = 256 * 65536L * UAEMAJOR + 65536L * UAEMINOR + UAESUBREV;
 
@@ -698,8 +701,13 @@ void usage()
 	std::cout << "\nNotes:" << std::endl;
 	std::cout << "File names should be with absolute path." << std::endl;
 	std::cout << "\nExample 1:" << std::endl;
+#ifdef REDQUARK
 	std::cout << "amiberry --model A1200 -G" << std::endl;
 	std::cout << "This will use the A1200 default settings as found in the QuickStart panel." << std::endl;
+#else
+	std::cout << "amiberry --model A1200R310 -G" << std::endl;
+	std::cout << "This will use the A1200 default settings as found in the QuickStart panel, with KS 3.1." << std::endl;
+#endif
 	std::cout << "Additionally, it will override 'use_gui' to 'no', so that it enters emulation directly." << std::endl;
 	std::cout << "\nExample 2:" << std::endl;
 	std::cout << "amiberry --config conf/A500.uae --statefile savestates/game.uss -s use_gui=no" << std::endl;
@@ -821,6 +829,24 @@ static void parse_cmdline(int argc, TCHAR** argv)
 			//loaded = true;
 		}
 #if defined REDQUARK
+		else if (_tcscmp(argv[i], _T("--playlist")) == 0 )
+        {
+			if (i + 1 == argc)
+				write_log(_T("Missing argument for '--playlist' option.\n"));
+			else
+			{
+				auto* const txt = parse_text_path(argv[++i]);
+				const auto txt2 = get_filename_extension(txt); // Extract the extension from the string  (incl '.')
+				if (_tcscmp(txt2.c_str(), ".m3u") == 0)
+				{
+					write_log("Playlist... %s\n", txt);
+					playlist_auto_prefs(&currprefs, txt);
+					xfree(txt);
+				}
+				else
+					write_log("Can't find extension ... %s\n", txt);
+			}
+        }
 		else if (_tcsncmp(argv[i], _T("-restore"), 7) == 0)
 		{
 			const auto txt = parse_text_path( RESTORE_CONFIG_FILE);
@@ -850,6 +876,17 @@ static void parse_cmdline(int argc, TCHAR** argv)
 				auto* const txt = parse_text_path(argv[++i]);
                 auto config_type = CONFIG_TYPE_HARDWARE | CONFIG_TYPE_HOST | CONFIG_TYPE_NORESET;
                 cfgfile_load(&currprefs, txt, &config_type, 0, 1);
+				xfree(txt);
+			}
+		}
+		else if (_tcscmp(argv[i], _T("--capsimg")) == 0 )
+		{
+			if (i + 1 == argc)
+				write_log(_T("Missing argument for '--capsimg' option.\n"));
+			else
+			{
+				auto* const txt = parse_text_path(argv[++i]);
+				capsimg_auto_prefs(&currprefs, txt);
 				xfree(txt);
 			}
 		}
@@ -886,25 +923,36 @@ static void parse_cmdline(int argc, TCHAR** argv)
 			else
 			{
 				auto* const txt = parse_text_path(argv[++i]);
+                int rom = -1;
+#ifdef REDQUARK
+                int l = strlen(txt) - 1;
+                while( l > 0 && txt[l] != 'R' ) l--;
+                if( l > 0 ) {
+                    txt[l] = '\0';
+                    rom = atoi(txt + l + 1);
+                }
+                if( rom <= 0 ) rom = -1;
+
+#endif
 				if (_tcscmp(txt, _T("A500")) == 0)
 				{
-					bip_a500(&currprefs, -1);
+					bip_a500(&currprefs, rom);
 				}
 				else if (_tcscmp(txt, _T("A500P")) == 0)
 				{
-					bip_a500plus(&currprefs, -1);
-				}
+					bip_a500plus(&currprefs, rom);
+                }
 				else if (_tcscmp(txt, _T("A1200")) == 0)
 				{
-					bip_a1200(&currprefs, -1);
+					bip_a1200(&currprefs, rom);
 				}
 				else if (_tcscmp(txt, _T("A4000")) == 0)
 				{
-					bip_a4000(&currprefs, -1);
+					bip_a4000(&currprefs, rom);
 				}
 				else if (_tcscmp(txt, _T("CD32")) == 0)
 				{
-					bip_cd32(&currprefs, -1);
+					bip_cd32(&currprefs, rom);
 				}
 			}
 		}

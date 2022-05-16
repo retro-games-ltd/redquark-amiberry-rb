@@ -13,6 +13,9 @@
 #ifdef REDQUARK
 #include "virtual_keyboard.h"
 static int swapped_state[MAX_JPORTS] = {0};
+static int start_b_state [MAX_INPUT_DEVICES] = {0};
+static int start_was_modified[MAX_INPUT_DEVICES] = {0};
+static int has_extended_start_button_functions = 1; // TODO Set this properly
 #endif
 
 static struct host_input_button default_controller_map;
@@ -1189,6 +1192,19 @@ static int get_joystick_flags(int num)
 }
 
 #ifdef REDQUARK
+void
+swap_physical_joysticks()
+{
+    // Swaps the joystick connection. This allows a game to be started with an 12 button controller
+    // and then have the game input swapped to take from another controller/joystick which presumably
+    // only has 2 fire buttons (meaning it could not be used to launch the game).
+    //
+	if (nr_joysticks < 2) return;
+    SDL_GameController *first = controllertable[0];
+    controllertable[0] = controllertable[1];
+    controllertable[1] = first;
+}
+
 static void release_joystick_buttons( int joyid, int swapped )
 {
     const auto joy_offset = num_keys_as_joys;
@@ -1212,7 +1228,7 @@ static void release_joystick_buttons( int joyid, int swapped )
     setjoybuttonstate(hostjoyid + joy_offset, 4 + held_offset, val & 1 );
     setjoybuttonstate(hostjoyid + joy_offset, 5 + held_offset, val & 1 );
 
-    // Start button
+    // Guide/back button
     setjoybuttonstate(hostjoyid + joy_offset, 6 + held_offset, val & 1 );
 
     // DPad
@@ -1220,71 +1236,122 @@ static void release_joystick_buttons( int joyid, int swapped )
     setjoybuttonstate(hostjoyid + joy_offset, 8 + held_offset, val & 1 );
     setjoybuttonstate(hostjoyid + joy_offset, 9 + held_offset, val & 1 );
     setjoybuttonstate(hostjoyid + joy_offset, 10 + held_offset, val & 1 );
+
+    // These are release outisde
+    //setjoybuttonstate(hostjoyid + joy_offset, 13 + held_offset, val & 1 );
+    //setjoybuttonstate(hostjoyid + joy_offset, 14 + held_offset, val & 1 );
+}
+
+// Handles special "system" functions like disk swapping while START button is held
+// Returns modified state of the start button.
+//
+static Sint16 handle_start_modified_buttons( SDL_GameController *ctrl, int joyid, int button, int *start_held_p )
+{
+    int start_held = 0;
+    int start_release = 0;
+    static int start_b_needs_release[32] = {0};
+
+    if( joyid >= MAX_INPUT_DEVICES ) return 0; // Just in case
+
+    Sint16 start_b_val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_START ) & 1;
+
+    if( !has_extended_start_button_functions ) return start_b_val;
+
+    start_held    = start_b_val;
+    start_release = (!start_held) && start_b_state[joyid];
+    start_b_val   = start_release && !start_was_modified[joyid] ? 1 : 0; // Cancel "quit" action if extended func used
+
+    if( start_release ) {
+        // Only action joystick swapping (physical not port) when the HOME/Start button has been
+        // released. Doing it when HOME is held screws things up because the joysticks swap!
+        if( start_b_needs_release[13] ) setjoybuttonstate(button, 13, 1 );
+
+        // Release start_button modified buttons when start button is released
+        int i;
+        for(i = 0; i < 32; i++ ) {
+            if( start_b_needs_release[i] ) setjoybuttonstate( button, i, 0 );
+            start_b_needs_release[i] = 0;
+        }
+        start_was_modified[joyid] = 0;
+
+    } else if( start_held ) {
+        if( !start_b_state[joyid] ) { // Release all usual joystick buttons as soon as start is pressed
+            release_joystick_buttons( joyid, 0 ); // Primary buttons
+            release_joystick_buttons( joyid, 1 ); // Secondary buttons
+        }
+
+#define SET_SM_BUTTON(a,b,c) { \
+        setjoybuttonstate(a, b, c ); \
+        if( c && b <= 32 ) start_b_needs_release[b] = 1; \
+        if( c ) start_was_modified[joyid] = 1; }
+
+        //Sint16 val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_LEFTSHOULDER ) & 1;
+        //SET_SM_BUTTON( button, 29, val ); // Disk swap prev 13 + 16
+        
+        Sint16 val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_X ) & 1;
+        if( val ) {
+            // Establish that joysticks need to be swapped, actioned on MENU button release
+            // Does not set state here.
+            start_b_needs_release[13] = 1;
+            start_was_modified[joyid] = 1; 
+        }
+
+        val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER ) & 1;
+        SET_SM_BUTTON( button, 14 + 16, val ); // Disk swap Next 14 + 16
+
+        val  = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_GUIDE );
+        val |= SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_BACK );
+        SET_SM_BUTTON( button, 15 + 16, val & 1 );
+
+        val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_Y );
+        SET_SM_BUTTON( button, 14, val & 1 ); // Auto-crop-image
+    }
+
+    start_b_state[joyid] = start_held;
+
+    *start_held_p = start_held;
+
+    return start_b_val;
 }
 
 static void read_joystick()
 {
     int dpup, dpdown, dpleft, dpright = 0;
-	for (auto joyid = 0; joyid < MAX_JPORTS; joyid++)
+
+    const auto lower_bound = -32767 / 4;
+    const auto upper_bound = +32767 / 4;
+
+    for (auto joyid = 0; joyid < MAX_JPORTS; joyid++)
 	{
-		// First handle retroarch (or default) keys as Joystick...
-		if (currprefs.jports[joyid].id >= JSEM_JOYS && currprefs.jports[joyid].id < JSEM_JOYS + num_keys_as_joys)
-		{
-			//
-			const auto hostkeyid = currprefs.jports[joyid].id - JSEM_JOYS;
-			auto keystate = SDL_GetKeyboardState(nullptr);
-			auto kb = hostkeyid;
-
-			// cd32 red, blue, green, yellow ... The bayx here appear to be SNES pad deisgnations, so XY and AB are swapped.
-			setjoybuttonstate(kb, 0, keystate[host_keyboard_buttons[kb].south_button] & 1); // b
-			setjoybuttonstate(kb, 1, keystate[host_keyboard_buttons[kb].east_button] & 1); // a
-			setjoybuttonstate(kb, 2, keystate[host_keyboard_buttons[kb].north_button] & 1); //y 
-			setjoybuttonstate(kb, 3, keystate[host_keyboard_buttons[kb].west_button] & 1); // x
-
-			setjoybuttonstate(kb, 4, keystate[host_keyboard_buttons[kb].left_shoulder] & 1); // z 
-			setjoybuttonstate(kb, 5, keystate[host_keyboard_buttons[kb].right_shoulder] & 1); // x
-			setjoybuttonstate(kb, 6, keystate[host_keyboard_buttons[kb].start_button] & 1); //num1
-			// up down left right     
-			setjoybuttonstate(kb, 7, keystate[host_keyboard_buttons[kb].dpad_up] & 1);
-			setjoybuttonstate(kb, 8, keystate[host_keyboard_buttons[kb].dpad_down] & 1);
-			setjoybuttonstate(kb, 9, keystate[host_keyboard_buttons[kb].dpad_left] & 1);
-			setjoybuttonstate(kb, 10, keystate[host_keyboard_buttons[kb].dpad_right] & 1);
-
-			// stick left/right     
-			setjoybuttonstate(kb, 11, keystate[host_keyboard_buttons[kb].lstick_button] & 1);
-			setjoybuttonstate(kb, 12, keystate[host_keyboard_buttons[kb].rstick_button] & 1);
-			setjoybuttonstate(kb, 13, keystate[host_keyboard_buttons[kb].select_button] & 1); // num2
-
-			// hotkey?
-			if (host_keyboard_buttons[kb].hotkey_button != -1 && keystate[host_keyboard_buttons[kb].hotkey_button] & 1)
-			{
-				// menu button
-				if (host_keyboard_buttons[kb].menu_button != -1)
-					setjoybuttonstate(kb, 14, keystate[host_keyboard_buttons[kb].menu_button] & 1);
-				// quit button
-				if (host_keyboard_buttons[kb].quit_button != -1)
-					setjoybuttonstate(kb, 15, keystate[host_keyboard_buttons[kb].quit_button] & 1);
-				// reset button
-				//setjoybuttonstate(kb, 30,keystate[host_keyboard_buttons[kb].reset_button] & 1) ;
-			}
-		}
-		else if (jsem_isjoy(joyid, &currprefs) != -1) // Real controller 
-		{
+        if (currprefs.jports[joyid].id >= JSEM_JOYS && currprefs.jports[joyid].id < JSEM_JOYS + num_keys_as_joys)
+        {
+            // Keys as joystick. Not handled.
+            //const auto hostjoyid = currprefs.jports[joyid].id - JSEM_JOYS;
+            //printf("K Joyid %d  id %d  hostjoyid %d\n", joyid, currprefs.jports[joyid].id, hostjoyid );
+        }
+        else if (jsem_isjoy(joyid, &currprefs) != -1) // Real controller
+        {
+            auto held_offset = 0;
+            Sint16 val;
 			const auto joy_offset = num_keys_as_joys;
-		    const auto lower_bound = -32767 / 4;
-		    const auto upper_bound = +32767 / 4;
-
 			const auto hostjoyid = currprefs.jports[joyid].id - JSEM_JOYS - num_keys_as_joys;
 
             SDL_GameController *ctrl = controllertable[hostjoyid];
+            //printf("J Joyid %d  id %d  hostjoyid %d  joy_offset %d  passed %d\n", joyid, currprefs.jports[joyid].id, hostjoyid, joy_offset, hostjoyid + joy_offset );
+
+            int start_held;
+            Sint16 start_b_val = handle_start_modified_buttons( ctrl, hostjoyid, hostjoyid + joy_offset, &start_held );
 
             // Handle virtual keyboard, if enabled
-            if( virtual_keyboard_handle_input( ctrl, hostjoyid, hostjoyid + joy_offset ) > 0 )
+            if( virtual_keyboard_handle_input( ctrl, hostjoyid, hostjoyid + joy_offset, start_b_val ) > 0 )
                 continue;
 
-            auto held_offset = 0;
-            Sint16 val;
+		    setjoybuttonstate(hostjoyid + joy_offset, 15, start_b_val ); // Quit
 
+            if( start_held ) continue;
+
+            // Finished handling start/home button. Now process others
+            //
             SDL_GameControllerButton hotbutton = (SDL_GameControllerButton)(currprefs.jports[joyid].hotbutton - 1);
 
             if( hotbutton != SDL_CONTROLLER_BUTTON_INVALID ) {
@@ -1353,16 +1420,16 @@ static void read_joystick()
             }
 
             if( hotbutton != SDL_CONTROLLER_BUTTON_LEFTSHOULDER ) {
-                val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_LEFTSHOULDER );
-                setjoybuttonstate(hostjoyid + joy_offset, 4 + held_offset, val & 1 );
+                val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_LEFTSHOULDER ) & 1;
+                setjoybuttonstate(hostjoyid + joy_offset, 4 + held_offset, val );
             }
 
             if( hotbutton != SDL_CONTROLLER_BUTTON_RIGHTSHOULDER ) {
-                val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER );
-                setjoybuttonstate(hostjoyid + joy_offset, 5 + held_offset, val & 1 );
+                val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER ) & 1;
+                setjoybuttonstate(hostjoyid + joy_offset, 5 + held_offset, val );
             }
 
-            // Start button
+            // Guide/Back/ (A500 = Menu) button 
             if( hotbutton != SDL_CONTROLLER_BUTTON_GUIDE && hotbutton != SDL_CONTROLLER_BUTTON_BACK ) {
                 val  = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_GUIDE );
                 val |= SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_BACK );
@@ -1383,11 +1450,12 @@ static void read_joystick()
             val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_DPAD_RIGHT );
 			setjoybuttonstate(hostjoyid + joy_offset, 10 + held_offset, dpright | (val & 1) );
             
-            // select button = 13
-            
-            // Quit (Never modified by hotkey)
-            val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_START );
-			setjoybuttonstate(hostjoyid + joy_offset, 15, val & 1 );
+            // 13 would traditionally be num2
+            // 14 would traditionally be menu
+            // 
+            // 13 = Phys Jostick swap 13 + 16 = Not assigned
+            // 14 = Auto_Crop         14 + 16 = Disk next
+            // 15 = Quit              15 + 16 = Virtual keyboard
 		}
 	}
 }
@@ -2011,10 +2079,21 @@ int input_get_default_joystick(struct uae_input_device* uid, int num, int port, 
 	{
 		setid(uid, num, ID_BUTTON_OFFSET + 15, 0, port, INPUTEVENT_SPC_QUIT, gp);
 	}
+#if defined REDQUARK
+    // Special functions - activated by holding start button
+    // TODO If more than three are required, setid can be called to remap buttons while start_button is held for
+    // the current joystick and then reverted back on release (implement getid() )
+	setid(uid, num, ID_BUTTON_OFFSET + 13 +  0, 0, port, INPUTEVENT_SPC_SWAPJOYSTICKS, gp);    // 13
+	setid(uid, num, ID_BUTTON_OFFSET + 14 +  0, 0, port, INPUTEVENT_SPC_AUTO_CROP_IMAGE,  gp); // 14
+	//setid(uid, num, ID_BUTTON_OFFSET + 13 + 16, 0, port, INPUTEVENT_SPC_DISKSWAPPER_PREV, gp); // 29
+	setid(uid, num, ID_BUTTON_OFFSET + 14 + 16, 0, port, INPUTEVENT_SPC_DISKSWAPPER_NEXT, gp); // 30
+	setid(uid, num, ID_BUTTON_OFFSET + 15 + 16, 0, port, INPUTEVENT_SPC_VIRTUAL_KEYBOARD, gp); // 31
+#else
 	if (currprefs.use_retroarch_reset)
 	{
-		setid(uid, num, ID_BUTTON_OFFSET + 30, 0, port, INPUTEVENT_SPC_SOFTRESET, gp);
+		setid(uid, num, ID_BUTTON_OFFSET + 30, 0, port, INPUTEVENT_SPC_SOFTRESET, gp); // XXX Is this correct? Wouldn't this be enter_gui (14) + hold_offset (16) ?
 	}
+#endif
 
 	if (num >= 0 && num < nr_joysticks)
 	{

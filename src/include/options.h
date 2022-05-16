@@ -975,6 +975,8 @@ struct uae_prefs
     bool save_state_on_exit;
     int ignore_keycodes[ MAX_INPUT_DEVICE_EVENTS ];
     bool ignore_gui;
+	TCHAR playlist[MAX_DPATH];
+    int   playlist_current_disk;
 #endif
 	struct whdbooter whdbootprefs;
 #endif
@@ -1113,6 +1115,7 @@ extern bool cfgfile_createconfigstore(struct uae_prefs* p);
 extern void cfgfile_get_shader_config(struct uae_prefs* p, int rtg);
 
 #ifdef AMIBERRY
+extern void capsimg_auto_prefs(struct uae_prefs* prefs, char* filename);
 extern void whdload_auto_prefs(struct uae_prefs* prefs, char* filename);
 extern void cd_auto_prefs(struct uae_prefs* prefs, char* filename);
 extern void symlink_roms(struct uae_prefs* prefs);

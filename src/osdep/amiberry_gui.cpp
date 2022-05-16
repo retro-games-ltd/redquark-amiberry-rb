@@ -231,7 +231,7 @@ static int isromext(char* path)
 	ext++;
 
 	if (!stricmp(ext, "rom") || !stricmp(ext, "adf") || !stricmp(ext, "key")
-		|| !stricmp(ext, "a500") || !stricmp(ext, "a1200") || !stricmp(ext, "a4000"))
+		|| !stricmp(ext, "a500") || !stricmp( ext, "a600") || !stricmp(ext, "a1200") || !stricmp(ext, "a4000"))
 		return 1;
 	for (auto i = 0; uae_archive_extensions[i]; i++)
 	{

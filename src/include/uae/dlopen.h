@@ -25,6 +25,7 @@ void uae_dlclose(UAE_DLHANDLE handle);
 
 /* UAE plugin support functions */
 
+void uae_dlopen_set_capsimg_path( const TCHAR *path );
 UAE_DLHANDLE uae_dlopen_plugin(const TCHAR* name);
 void uae_dlopen_patch_common(UAE_DLHANDLE handle);
 

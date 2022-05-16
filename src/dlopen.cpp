@@ -60,6 +60,13 @@ static amiga_plugin_lookup_function plugin_lookup;
 }
 #endif
 
+static char dlopen_capsimg_path[MAX_DPATH] = {0};
+void uae_dlopen_set_capsimg_path( const TCHAR *path )
+{
+    //if(path) sprintf(dlopen_capsimg_path, "%scapsimg.so", path);
+    if(path) strcpy(dlopen_capsimg_path, path);
+}
+
 UAE_DLHANDLE uae_dlopen_plugin(const TCHAR *name)
 {
 #if defined(AMIBERRY) // ME
@@ -72,7 +79,7 @@ UAE_DLHANDLE uae_dlopen_plugin(const TCHAR *name)
 		return NULL;
 	}
 */
-	UAE_DLHANDLE handle = uae_dlopen("./capsimg.so");
+	UAE_DLHANDLE handle = uae_dlopen( *dlopen_capsimg_path ? dlopen_capsimg_path : "./capsimg.so");
 #elif defined(WINUAE)
 	TCHAR path[MAX_DPATH];
 	_tcscpy(path, name);

@@ -499,7 +499,10 @@ endif
 
 ifneq (,$(findstring redquark,$(PLATFORM)))
 OBJS +=	\
-	src/osdep/virtual_keyboard.o
+	src/osdep/delta.o \
+	src/osdep/virtual_keyboard.o \
+	src/osdep/disk_swap.o \
+	src/osdep/playlist.o
 endif
 
 WITHJIT=1

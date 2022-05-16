@@ -455,6 +455,7 @@ extern int find_in_array(const int arr[], int n, int key);
 extern int num_keys_as_joys;
 
 extern bool key_used_by_retroarch_joy(int scancode);
+extern void swap_physical_joysticks();
 #endif
 
 #endif /* UAE_INPUTDEVICE_H */

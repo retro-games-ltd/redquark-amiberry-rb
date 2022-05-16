@@ -21,6 +21,7 @@
 #if defined REDQUARK
 #include <sys/sendfile.h>
 #include <unistd.h>
+#include <playlist.h>
 #endif
 
 #include "sysdeps.h"
@@ -51,6 +52,7 @@
 
 #include "clipboard.h"
 #include "uae/uae.h"
+#include "uae/dlopen.h"
 
 extern FILE* debugfile;
 
@@ -326,7 +328,9 @@ void target_execute(const char* command)
 	set_mouse_grab(false);
 	try
 	{
+#if !defined REDQUARK
 		system(command);
+#endif
 	}
 	catch (...)
 	{
@@ -557,6 +561,7 @@ void target_default_options(struct uae_prefs* p, int type)
     p->gfx_dynamic_safe_zone = 30; // 30 px safe zone top and bottom of display (in "fit" mode)
     memset( p->ignore_keycodes, 0, sizeof(p->ignore_keycodes) / sizeof(p->ignore_keycodes[0]) );
     p->ignore_gui = 0;
+    //p->start_gui = false;
 #endif
 
     if( type == 0 ) p->whdload_file[0] = 0;
@@ -651,6 +656,11 @@ void target_save_options(struct zfile* f, struct uae_prefs* p)
 	cfgfile_write(f, _T("amiberry.gfx_dynamic_top"), _T("%d"), p->gfx_dynamic_top );
 	cfgfile_write(f, _T("amiberry.gfx_dynamic_height"), _T("%d"), p->gfx_dynamic_height );
 	cfgfile_write(f, _T("amiberry.gfx_dynamic_safe_zone"), _T("%d"), p->gfx_dynamic_safe_zone );
+
+    if( p->playlist[0] ) {
+        sprintf( tmp, "%s:%d", p->playlist, p->playlist_current_disk );
+        cfgfile_write_str(f, _T("amiberry.playlist"),  tmp );
+    }
 #endif
 }
 
@@ -791,8 +801,14 @@ int target_parse_option(struct uae_prefs* p, const char* option, const char* val
         
         return 1;
     }
-	if (cfgfile_yesno(option, value, _T("ignore_gui"), &p->ignore_gui))
+	if (cfgfile_string(option, value, "playlist", p->playlist, sizeof p->playlist)){
+        playlist_auto_open( p, p->playlist );
+        return 1;
+    }
+	if (cfgfile_yesno(option, value, _T("ignore_gui"), &p->ignore_gui)) {
+        //p->start_gui = false;
 		return 1;
+    }
 	if (cfgfile_yesno(option, value, _T("force_jit"), &p->force_jit))
 		return 1;
 #endif
@@ -2318,4 +2334,12 @@ int copyfile( const char *target, const char *source, int replace )
 
     return ret;
 }
+
+void
+capsimg_auto_prefs(struct uae_prefs* prefs, char* filepath)
+{
+    if( filepath != NULL && filepath[0] ) 
+        uae_dlopen_set_capsimg_path( filepath ); // Set path to capsimg
+}
+
 #endif

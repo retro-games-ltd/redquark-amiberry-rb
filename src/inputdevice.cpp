@@ -45,6 +45,8 @@
 #include "statusline.h"
 #ifdef REDQUARK
 #include "virtual_keyboard.h"
+#include "disk_swap.h"
+#include "auto_crop.h"
 #endif
 
 #define COMPA_RESERVED_FLAGS (ID_FLAG_INVERT)
@@ -4115,6 +4117,18 @@ static bool inputdevice_handle_inputcode2(int code, int state, const TCHAR *s)
 	case AKS_VIRTUAL_KEYBOARD:
         virtual_keyboard_enable();
 		break;
+    case AKS_DISKSWAPPER_NEXT:
+        disk_swap_next();
+        break;
+    case AKS_DISKSWAPPER_PREV:
+        disk_swap_previous();
+        break;
+    case AKS_AUTO_CROP_IMAGE:
+        auto_crop_image();
+        break;
+    case AKS_SWAPJOYSTICKS:
+        swap_physical_joysticks();
+        break;
 #endif
 	case AKS_SOFTRESET:
 		uae_reset (0, 0);

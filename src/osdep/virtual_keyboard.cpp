@@ -41,7 +41,7 @@ struct virtual_keyboard vkeyboard = {
     {{ AK_7,        NO_MOD, }, { AK_8,        NO_MOD, }, { AK_9,          NO_MOD, }, { AK_0,          NO_MOD, }},
 
     {{ AK_SPC,      NO_MOD, }, { AK_UP,       NO_MOD, }, { AK_RET,        NO_MOD, }, { AK_BS,         NO_MOD, }},
-    {{ AK_LF,       NO_MOD, }, { AK_DN,       NO_MOD, }, { AK_LF,         NO_MOD, }, { AK_DEL,        NO_MOD, }},
+    {{ AK_LF,       NO_MOD, }, { AK_DN,       NO_MOD, }, { AK_RT,         NO_MOD, }, { AK_DEL,        NO_MOD, }},
 
     {{ AK_1,        AK_LSH, }, { AK_2,        AK_LSH, }, { AK_3,          AK_LSH, }, { AK_4,          AK_LSH, }}, 
     {{ AK_5,        AK_LSH, }, { AK_6,        AK_LSH, }, { AK_7,          AK_LSH, }, { AK_8,          AK_LSH, }},
@@ -80,73 +80,6 @@ static MFB_Surface *selector_surface = NULL;
 
 static MFB_Texture *keyboard_texture = NULL;
 static MFB_Texture *selector_texture = NULL;
-
-// ----------------------------------------------------------------------------
-
-static void
-delta_initialise( Delta *d, int target, int period, DeltaFlag flag )
-{
-    d->flag = flag;
-    d->period_ms = period;
-    d->frame_period_ms = (get_host_hz() == 50) ? 20 : 17;
-
-    d->start = d->current = d->target = target * ((d->flag & DELTA_FLAG_PRECISION) ? 100 : 1);
-}
-
-// ----------------------------------------------------------------------------------
-// Sets target value and sets up time period
-static void
-delta_set( Delta *d, int target, DeltaFlag flag )
-{
-    if( flag ) d->flag = (DeltaFlag)((d->flag & DELTA_FLAG_PRECISION) | flag);
-
-    d->start    = d->current;
-    d->target   = target * ((d->flag & DELTA_FLAG_PRECISION) ? 100 : 1);
-    d->target_t = TIME_NOW_MS + d->period_ms;
-}
-
-// ----------------------------------------------------------------------------------
-//
-static void
-delta_reset( Delta *d, int target )
-{
-    d->start = d->current = d->target = target * ((d->flag & DELTA_FLAG_PRECISION) ? 100 : 1);
-}
-
-// ----------------------------------------------------------------------------------
-// Returns the time difference in ms until delta process finishes.
-static int
-delta_process( Delta *d )
-{
-    if( d->target == d->current ) return 0;
-
-    int remaining = d->target_t - (TIME_NOW_MS + d->frame_period_ms);
-
-    if( remaining <= 0 ) {
-        d->current = d->target;
-        // If remaining was == 0, then 0 would be returned and the caller would
-        // not be able to tell the difference between "nothing to do" and "delta has just done the last step".
-        // Set remaining to 1 so the _next_ time delta_process is called, zero will be returned.
-        remaining = 1;
-    }
-    else if( d->flag & DELTA_FLAG_LOG )                                             // PI/2 .. 0
-        d->current = d->start  + (float)(d->target - d->start) * sin( M_PI_2 - M_PI_2 * ((float)(d->target_t - TIME_NOW_MS) / (d->period_ms)) );
-    else if( d->flag & DELTA_FLAG_LOG_INV )
-        d->current = d->target - (float)(d->target - d->start) * sin(          M_PI_2 * ((float)(d->target_t - TIME_NOW_MS) / (d->period_ms)) );
-    else
-        d->current += (d->frame_period_ms * (d->target - d->current)) / (d->target_t - TIME_NOW_MS ); // Linear
-
-    return remaining;
-}
-
-// ----------------------------------------------------------------------------------
-//
-static float
-delta_get( Delta *d )
-{
-    float r = d->current / ((d->flag & DELTA_FLAG_PRECISION) ? 100 : 1);
-    return d->flag & DELTA_FLAG_PRECISION ? r : rint(r);
-}
 
 // ----------------------------------------------------------------------------
 //
@@ -308,7 +241,7 @@ virtual_keyboard_enable()
 {
     int x,y;
 
-    if( is_disabling || savestate_then_quit ) return 0;
+    if( is_enabled || is_disabling || savestate_then_quit ) return 0;
 
     if( get_grid_coords( vkeyboard.row, vkeyboard.col, &x, &y ) != 0 ) return -1;
 
@@ -464,7 +397,7 @@ static const auto upper_bound = 32767;
     else if( val > 0 ) dir = (dp); }
      
 int
-virtual_keyboard_handle_input( SDL_GameController *ctrl, int joyid, int offset )
+virtual_keyboard_handle_input( SDL_GameController *ctrl, int joyid, int offset, int start_b_val )
 {
     static int           active_joyid = -1;
     static unsigned long repeat_time  =  0;
@@ -508,6 +441,9 @@ virtual_keyboard_handle_input( SDL_GameController *ctrl, int joyid, int offset )
 
         MOVE_ON_BUTTON( ctrl, SDL_CONTROLLER_BUTTON_GUIDE,      SELECTOR_GUIDE  );
         MOVE_ON_BUTTON( ctrl, SDL_CONTROLLER_BUTTON_BACK,       SELECTOR_GUIDE  );
+
+        // Monitor start button, so we can detect when all buttons are released, then we set guide_has_been_released
+        MOVE_ON_BUTTON( ctrl, SDL_CONTROLLER_BUTTON_START,      SELECTOR_START  ); 
 
         // a button being held will set active_joyid for that controller, so 
         // on activation of the VK, a button may be held down. Wait for no buttons
@@ -597,7 +533,8 @@ virtual_keyboard_handle_input( SDL_GameController *ctrl, int joyid, int offset )
     } while(0);
 
     // Handle quit
-    val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_START );
+    //val = SDL_GameControllerGetButton( ctrl, SDL_CONTROLLER_BUTTON_START );
+    val = start_b_val;
     setjoybuttonstate( offset, 15, val & 1 );
 
     return 1;

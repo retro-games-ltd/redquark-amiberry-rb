@@ -5,6 +5,7 @@
 #include "options.h"
 #include "inputdevice.h"
 #include "keyboard.h"
+#include "delta.h"
 
 #define VK_ROWS 24
 #define VK_COLS 4
@@ -13,24 +14,6 @@
 #define KEY_HEIGHT 22
 #define KEY_SPACE_H 4
 #define KEY_SPACE_V 4
-
-typedef enum {
-    DELTA_FLAG_NONE      = 0,
-    DELTA_FLAG_LOG       = 1<<0,
-    DELTA_FLAG_LOG_INV   = 1<<1,
-    DELTA_FLAG_LINEAR    = 1<<2,
-    DELTA_FLAG_PRECISION = 1<<3,
-} DeltaFlag;
-
-typedef struct {
-    int           start;
-    int           target;          // The value to hit
-    float         current;         // The current fractional value
-    unsigned long target_t;        // The absolute time at which to hit the target value
-    unsigned long period_ms;       // The number of ms within which to hit the target value.
-    unsigned long frame_period_ms; // The smallest duration between process calls
-    DeltaFlag     flag;
-} Delta;
 
 typedef enum {
     SELECTOR_NONE   = 0,
@@ -44,6 +27,7 @@ typedef enum {
     SELECTOR_RETURN = 1<<6,
     SELECTOR_DELETE = 1<<7,
     SELECTOR_SPACE  = 1<<8,
+    SELECTOR_START  = 1<<9,
 } SelectorDirection;
 
 struct virtual_keyboard_key {
@@ -77,6 +61,6 @@ struct virtual_keyboard {
 int virtual_keyboard_init( MFB_Screen *screen );
 int virtual_keyboard_finish(); 
 int virtual_keyboard_process( );
-int virtual_keyboard_handle_input( SDL_GameController *ctrl, int joyid, int offset );
+int virtual_keyboard_handle_input( SDL_GameController *ctrl, int joyid, int offset, int start_b_val );
 int virtual_keyboard_enable();
 int virtual_keyboard_get_displacement();

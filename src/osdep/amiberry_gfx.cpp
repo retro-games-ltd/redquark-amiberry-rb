@@ -48,6 +48,7 @@
 # include "malifb.h"
 # include "audio.h"
 # include "virtual_keyboard.h"
+# include "disk_swap.h"
 # include "memory.h"
 # include "newcpu.h"
 
@@ -490,6 +491,20 @@ static void redquark_dynamic_scale_reset()
 
 // ----------------------------------------------------------------------------
 //
+void auto_crop_image()
+{
+    int t, b, h;
+    get_display_center( &t, &b );
+    //if( center_mode == 0 && t >= 26) t -= 26; // Adjust position if self-centering TODO Have a config adjust?
+    h = b - t;
+
+    changed_prefs.gfx_dynamic_top    = t;
+    changed_prefs.gfx_dynamic_height = h;
+    //set_config_changed();
+}
+
+// ----------------------------------------------------------------------------
+//
 static inline void redquark_dynamic_scale( int ds )
 {
     int t, b, h;
@@ -671,6 +686,9 @@ static int display_thread(void *unused)
 
                 if( virtual_keyboard_init( redquark_screen ) < 0 ) {
                     printf("Failed to init vkeyboard\n");
+                }
+                if( disk_swap_init( redquark_screen ) < 0 ) {
+                    printf("Failed to init disk swap ui\n");
                 }
                 MFB_VSyncCallback( redquark_screen, vsync_callback );
             }
@@ -1946,6 +1964,9 @@ int check_prefs_changed_gfx()
 	}
 
 #if defined REDQUARK
+    currprefs.gfx_dynamic_top    = changed_prefs.gfx_dynamic_top;
+    currprefs.gfx_dynamic_height = changed_prefs.gfx_dynamic_height;
+
 	if( currprefs.force_jit != changed_prefs.force_jit ) {
         if( changed_prefs.force_jit == false ){
             currprefs.cachesize = 0;
@@ -1953,6 +1974,9 @@ int check_prefs_changed_gfx()
         } else {
             currprefs.cachesize = MAX_JIT_CACHE;
             currprefs.compfpu = true;
+            currprefs.cpu_compatible         = false;
+            currprefs.cpu_cycle_exact        = false;
+            currprefs.cpu_memory_cycle_exact = false;
         }
 	    currprefs.force_jit = changed_prefs.force_jit;
     }
@@ -1999,6 +2023,7 @@ bool render_screen(bool immediate)
 #define SAVE_STATE_DELAY_FRAMES 2
 
     virtual_keyboard_process( );
+    disk_swap_process( );
 
     // Straight after boot, see if JIT is to be enabled, and do so.
     // Admittedly, this is a bit of a hack, but there didn't seem to be a reliable way to make
@@ -2008,6 +2033,10 @@ bool render_screen(bool immediate)
     if( currprefs.force_jit && frames_until_jit_flip && (--frames_until_jit_flip == 0) ) {
         changed_prefs.cachesize = MAX_JIT_CACHE;
         changed_prefs.compfpu = true;
+        changed_prefs.cpu_compatible         = false;
+        changed_prefs.cpu_cycle_exact        = false;
+        changed_prefs.cpu_memory_cycle_exact = false;
+        changed_prefs.address_space_24       = false;
         set_config_changed();
     }
 

@@ -234,8 +234,10 @@ struct game_options get_game_settings(char* HW)
 	//strcpy(output_detail.scr_centerh, find_whdload_game_option("SCREEN_CENTERH", HW).c_str());
 	//strcpy(output_detail.scr_centerv, find_whdload_game_option("SCREEN_CENTERV", HW).c_str());
 	strcpy(output_detail.ntsc, find_whdload_game_option("NTSC", HW).c_str());
+#if !defined REDQUARK
 	strcpy(output_detail.fast, find_whdload_game_option("FAST_RAM", HW).c_str());
 	strcpy(output_detail.z3, find_whdload_game_option("Z3_RAM", HW).c_str());
+#endif
 
 	return output_detail;
 }
@@ -1203,6 +1205,7 @@ void whdload_auto_prefs(struct uae_prefs* prefs, char* filepath)
 		_stprintf(txt2, "cpu_type=%s", game_detail.cpu);
 		cfgfile_parse_line(prefs, txt2, 0);
 
+        // Note - This will override whatever was set by A600_CONFIG or A1200_CONFIG
 		_stprintf(txt2, "chipmem_size=4");
 		cfgfile_parse_line(prefs, txt2, 0);
 	}
