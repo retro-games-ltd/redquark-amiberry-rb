@@ -43,7 +43,7 @@
 
 #if defined REDQUARK
 # if defined(__arm__)
-#  include "GLES/gl.h"
+//#  include "GLES/gl.h"
 # endif
 # include "malifb.h"
 # include "audio.h"
